@@ -1,5 +1,5 @@
 #pragma once
-
+#include "shm_counting_set/shm_counting_set.h"
 #include <ygm/comm.hpp>
 #include <ygm/container/map.hpp>
 #include <ygm/container/array.hpp>
@@ -43,7 +43,6 @@ public:
         @param ygm::container::array<Edge>& src: array that will be sorted in the constructor.
     */
     explicit Sorted_COO(ygm::comm& c, ygm::container::array<Edge>& src): world(c), pthis(this) {
-
         src.sort();
         // creation of a container requires all ranks to be present
         /*

@@ -15,6 +15,18 @@
 
 #define SIZE 1024 * 1024    // million entries
 #define SHM_SIZE  (SIZE * sizeof(Entry)) // total size in bytes
+/*
+    use static assert to explicitly define the allowed datatype
+
+    shm only allows trivially copyable datatype (can be copied bit by bit); It does
+    not allow datatype of vector, string, etc. because they use heap memory to store data 
+    (heap pointer is local to the process. If a different process tries to use another process'
+    heap pointer, it will lead to seg fault).
+
+*/
+// explicitly define the datatype
+// plain old data, trivially copyable
+// static_assert
 template <typename Key, typename Value>
 class shm_counting_set{
 
@@ -24,7 +36,6 @@ public:
     using key_type = Key;
     using value_type = Value;
 
-
     explicit shm_counting_set(ygm::comm &c, internal_container_type &accum) : 
                             m_comm(c), 
                             m_local_size(m_comm.layout().local_size()),
@@ -33,6 +44,11 @@ public:
                             m_map(accum), 
                             m_bip_ptrs(m_local_size){
 
+        // printf("Rank %d, node size: %d, local id: %d, node id: %d\n", 
+        //         m_comm.rank(), 
+        //         m_local_size,
+        //         m_local_id,
+        //         m_node_id);
         /*
             Create shared memory files
         */
@@ -60,7 +76,7 @@ public:
             *raw pointer cannot be serialized, only ygm pointer can.
         */
         auto collect_filenames = [this, &BIP_filenames](int local_id, int node_id, int global_rank, std::string filename){
-            printf("Rank %d, Received filename %s from local rank %d, global rank %d\n", m_comm.rank(), filename.c_str(), local_id, global_rank);
+            //printf("Rank %d, Received filename %s from local rank %d, global rank %d\n", m_comm.rank(), filename.c_str(), local_id, global_rank);
             BIP_filenames.at(local_id) = filename;
         };
         
@@ -74,7 +90,7 @@ public:
         };
         if(m_comm.rank() == local_rank_zero){
             for(int i = local_rank_zero + 1; i < local_rank_zero + m_local_size; i++){
-                m_comm.cout("Sharing filenames to rank ", i);
+                //m_comm.cout("Sharing filenames to rank ", i);
                 m_comm.async(i, broadcastBIP, BIP_filenames);
             }
         }
@@ -109,7 +125,7 @@ public:
         //m_comm.log(log_level::info, "Destroying shm_counting_set");
     }
 
-    void cache_insert(const key_type &key, const value_type &value){
+    void cache_insert(const key_type &key, const value_type &value, int &flush_count){
         if(m_cache_empty){
             m_cache_empty = false;
             m_map.comm().register_pre_barrier_callback(
@@ -141,6 +157,7 @@ public:
             else{ // different key
                 // flush the slot
                 value_cache_flush(BIP_index, slot);
+                flush_count++;
                 cached_entry->s_key = key;
                 cached_entry->s_value = value;
             }
@@ -148,6 +165,7 @@ public:
         // if the cached value is greater than the value of int32, then flush that slot
         if(cached_entry->s_value >= std::numeric_limits<int32_t>::max() / 2){
             value_cache_flush(BIP_index, slot);
+            flush_count++;
         }
         //m_comm.cout(m_comm.rank(), " is unlocking local region ", BIP_index);
         pthread_mutex_unlock(&(shared_region->mutex));

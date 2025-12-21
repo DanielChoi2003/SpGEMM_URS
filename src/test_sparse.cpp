@@ -21,8 +21,8 @@ int main(int argc, char** argv){
     std::string amazon_output = "../data/real_results/amazon_numpy_output.csv";
     std::string epinions_output = "../data/real_results/Epinions_numpy_output.csv";
 
-    std::string filename_A = livejournal;
-    std::string filename_B = livejournal;
+    std::string filename_A = epinions;
+    std::string filename_B = epinions;
 
      // Task 1: data extraction
     auto bagap = std::make_unique<ygm::container::bag<Edge>>(world);
@@ -124,7 +124,7 @@ int main(int argc, char** argv){
     global_bag_C.gather(sorted_output_C, 0);
     if(world.rank0()){
         std::ofstream output_file;
-        output_file.open("../data/real_results/ygm_livejournal.csv");
+        output_file.open("./output.csv");
         std::sort(sorted_output_C.begin(), sorted_output_C.end());
         for(Edge &ed : sorted_output_C){
             output_file << ed.row << "," << ed.col << "," << ed.value << "\n";
@@ -132,10 +132,10 @@ int main(int argc, char** argv){
         }
         output_file.close();
 
-        //#define CSV_COMPARE
+        #define CSV_COMPARE
         #ifdef CSV_COMPARE
         std::string output = "./output.csv";
-        std::string expected_output = amazon_output;
+        std::string expected_output = epinions_output;
 
         //"../strong_scaling_output/epinions_results/second_epinions_strong_scaling_${i}_nodes.txt"
         // ignore all: > /dev/null 2>&1
@@ -143,7 +143,7 @@ int main(int argc, char** argv){
         int nodes = world.size() / 32;
         std::string cmd = "diff -y --suppress-common-lines "
                         + output + " " + expected_output + 
-                        " > ../strong_scaling_output/amazon_results/" +
+                        " > ../strong_scaling_output/epinions_results/" +
                         std::to_string(nodes) + "_nodes_difference.txt"; // TESTING
 
         int result = system(cmd.c_str());

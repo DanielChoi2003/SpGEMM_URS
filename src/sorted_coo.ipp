@@ -1,6 +1,18 @@
 #include "sorted_coo.hpp"
-
 using std::vector;
+// module load gcc/13.3.1 openmpi
+// 12/19
+// 12/22 or 23
+/*
+    2. the count of multplications and additions should stay across nodes
+
+    1. ygm::comm stat functions
+    size of messages (bytes) should stay constant
+    scope into the multiplication and addition section -> stat clear
+
+
+    data movement & partitioning 
+*/
 /*
     Member functions defined inside the class body are implicitly inline.
 */
@@ -48,8 +60,13 @@ inline void Sorted_COO::async_visit_row(
 
 template <class Matrix, class Accumulator>
 inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_accum){
+    int mult_count = 0;
+    int add_count = 0;
+    world.stats_reset();
 
-    auto multiplier = [](auto self, auto pmap, int input_value, int input_row, int input_column){
+    shm_counting_set cache(world, partial_accum);
+    world.barrier();
+    auto multiplier = [&cache, &mult_count, &add_count](auto self, auto pmap, int input_value, int input_row, int input_column){
          // find the first Edge with matching row to input_column with std::lower_bound
         int low = 0;
         int high = self->local_size;
@@ -76,15 +93,20 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
 
             // NOTE: could potentially overflow with large values
             int product = input_value * match_edge.value; // valueB * valueA;
+            mult_count++;
+
             if(product == 0){
                 continue;
             }
-            auto adder = [](const std::pair<int, int> &coord, int &partial_product, int value_add){
-                partial_product += value_add;
-            };
-            pmap->async_visit({input_row, match_edge.col}, adder, product); // Boost's hasher complains if I use a struct
-        }
+            // auto adder = [](const std::pair<int, int> &coord, int &partial_product, int value_add){
+            //     partial_product += value_add;
+            // };
+            // pmap->async_visit({input_row, match_edge.col}, adder, product); // Boost's hasher complains if I use a struct
+
+            cache.cache_insert({input_row, match_edge.col}, product, add_count);
+        }   
     }; 
+    
     ygm::ygm_ptr<Accumulator> pmap(&partial_accum);
     unsorted_matrix.local_for_all([&](int index, Edge &ed){
         int input_column = ed.col;
@@ -92,6 +114,9 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
         int input_value = ed.value;
         async_visit_row(input_column, multiplier, pthis, pmap, input_value, input_row, input_column);
     });
+    world.stats_print();
+    world.cout("number of multiplication: ", mult_count, ", number of addition: ", add_count);
+    world.barrier();
 }
 
 inline void Sorted_COO::print_metadata(){

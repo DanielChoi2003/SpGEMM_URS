@@ -9,7 +9,8 @@ int main(int argc, char **argv){
 
     shm_counting_set cache(world, accumulator);
 
-    cache.cache_insert({0, 0}, world.rank());
+    int garbo;
+    cache.cache_insert({0, 0}, world.rank(), garbo);
 
     world.barrier();
 
