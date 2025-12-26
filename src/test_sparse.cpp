@@ -2,7 +2,37 @@
 #include <ygm/io/csv_parser.hpp>
 #include <stdio.h>
 #include <mpi.h>
+#include <cstdlib>
+#include <string>
+#include <filesystem>
+#include <boost/container_hash/hash.hpp>
 
+
+struct map_key{
+    int x;
+    int y;
+
+    bool operator==(const map_key& other) const {
+        return x == other.x && y == other.y;
+    }
+
+    template <class Archive>
+    void serialize(Archive& ar) {
+        ar(x, y);
+    }
+};
+
+/*
+    std::pair is not trivially copyable -> need to use struct ->
+    requires custom hashing for the struct as std::pair is no longer
+    used
+*/
+std::size_t hash_value(map_key const& key) {
+  std::size_t seed = 0;
+  boost::hash_combine(seed, key.x);
+  boost::hash_combine(seed, key.y);
+  return seed;
+}
 
 int main(int argc, char** argv){
 
@@ -11,8 +41,15 @@ int main(int argc, char** argv){
     
     //#define UNDIRECTED_GRAPH
 
-    std::string filename_A = "../data/real_data/directed/soc-Epinions1.csv";
-    std::string filename_B = "../data/real_data/directed/soc-Epinions1.csv";
+    std::string livejournal =  "/usr/workspace/choi26/com-lj.ungraph.csv";
+    std::string amazon = "../data/real_data/undirected_single_edge/com-amazon.ungraph.csv";
+    std::string epinions = "../data/real_data/directed/soc-Epinions1.csv";
+
+    std::string amazon_output = "../data/real_results/amazon_numpy_output.csv";
+    std::string epinions_output = "../data/real_results/Epinions_numpy_output.csv";
+
+    std::string filename_A = epinions;
+    std::string filename_B = epinions;
 
      // Task 1: data extraction
     auto bagap = std::make_unique<ygm::container::bag<Edge>>(world);
@@ -37,8 +74,14 @@ int main(int argc, char** argv){
         bagap->async_insert(ed);
     });
     world.barrier();
+    // bagap->local_for_all([](Edge &e){
+    //     s_world.cout("bag: ", e.row, ", ", e.col, ", ", e.value);
+    // });
 
     ygm::container::array<Edge> unsorted_matrix(world, *bagap);
+    // unsorted_matrix.local_for_all([](Edge &e){
+    //     s_world.cout("matrix: ", e.row, ", ", e.col, ", ", e.value);
+    // });
     bagap.reset();
 
     // matrix B data extraction
@@ -68,6 +111,7 @@ int main(int argc, char** argv){
     ygm::container::array<Edge> sorted_matrix(world, *bagbp);
     bagbp.reset();
 
+    double global_start = MPI_Wtime();
     Sorted_COO test_COO(world, sorted_matrix);
     world.barrier();
 
@@ -87,10 +131,15 @@ int main(int argc, char** argv){
     //     }
     // }
 
-    ygm::container::map<std::pair<int, int>, int> matrix_C(world); 
-    test_COO.spGemm(unsorted_matrix, matrix_C);
 
+    ygm::container::map<map_key, int> matrix_C(world); 
+    test_COO.spGemm(unsorted_matrix, matrix_C);
     world.barrier();
+    double global_end = MPI_Wtime();    
+    world.cout0("Total number of cores: ", world.size());
+    world.cout0("Overall time (SpGEMM instance construction + matrix multiplication): ", global_end - global_start);
+
+
     // matrix_C.for_all([](std::pair<int, int> pair, int product){
     //     printf("%d, %d, %d\n", pair.first, pair.second, product);
     // });
@@ -100,18 +149,51 @@ int main(int argc, char** argv){
    
 
     ygm::container::bag<Edge> global_bag_C(world);
-    matrix_C.for_all([&global_bag_C](std::pair<int, int> coord, int product){
-        global_bag_C.async_insert({coord.first, coord.second, product});
+    matrix_C.for_all([&global_bag_C](map_key coord, int product){
+        global_bag_C.async_insert({coord.x, coord.y, product});
     });
     world.barrier();
 
     std::vector<Edge> sorted_output_C;
     global_bag_C.gather(sorted_output_C, 0);
     if(world.rank0()){
+        std::ofstream output_file;
+        output_file.open("./output.csv");
         std::sort(sorted_output_C.begin(), sorted_output_C.end());
         for(Edge &ed : sorted_output_C){
-            printf("%d,%d,%d\n", ed.row, ed.col, ed.value);
+            output_file << ed.row << "," << ed.col << "," << ed.value << "\n";
+            //printf("%d,%d,%d\n", ed.row, ed.col, ed.value);
         }
+        output_file.close();
+
+        #define CSV_COMPARE
+        #ifdef CSV_COMPARE
+        std::string output = "./output.csv";
+        std::string expected_output = epinions_output;
+
+        //"../strong_scaling_output/epinions_results/second_epinions_strong_scaling_${i}_nodes.txt"
+        // ignore all: > /dev/null 2>&1
+
+        int nodes = world.size() / 32;
+        std::string cmd = "diff -y --suppress-common-lines "
+                        + output + " " + expected_output + 
+                        " > ../strong_scaling_output/epinions_results/" +
+                        std::to_string(nodes) + "_nodes_difference.txt"; // TESTING
+
+        int result = system(cmd.c_str());
+
+        std::filesystem::remove("./output.csv");
+        if (result == 0) {
+            std::cout << "Files match!\n";
+            std::filesystem::remove(
+                        "../strong_scaling_output/epinions_results/" +
+                        std::to_string(nodes) + 
+                        "_nodes_difference.txt"
+                    );
+        } else {
+            std::cout << "Files differ!\n";
+        }
+        #endif
     }
     #endif
 
