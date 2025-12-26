@@ -5,7 +5,34 @@
 #include <cstdlib>
 #include <string>
 #include <filesystem>
+#include <boost/container_hash/hash.hpp>
 
+
+struct map_key{
+    int x;
+    int y;
+
+    bool operator==(const map_key& other) const {
+        return x == other.x && y == other.y;
+    }
+
+    template <class Archive>
+    void serialize(Archive& ar) {
+        ar(x, y);
+    }
+};
+
+/*
+    std::pair is not trivially copyable -> need to use struct ->
+    requires custom hashing for the struct as std::pair is no longer
+    used
+*/
+std::size_t hash_value(map_key const& key) {
+  std::size_t seed = 0;
+  boost::hash_combine(seed, key.x);
+  boost::hash_combine(seed, key.y);
+  return seed;
+}
 
 int main(int argc, char** argv){
 
@@ -47,8 +74,14 @@ int main(int argc, char** argv){
         bagap->async_insert(ed);
     });
     world.barrier();
+    // bagap->local_for_all([](Edge &e){
+    //     s_world.cout("bag: ", e.row, ", ", e.col, ", ", e.value);
+    // });
 
     ygm::container::array<Edge> unsorted_matrix(world, *bagap);
+    // unsorted_matrix.local_for_all([](Edge &e){
+    //     s_world.cout("matrix: ", e.row, ", ", e.col, ", ", e.value);
+    // });
     bagap.reset();
 
     // matrix B data extraction
@@ -98,7 +131,8 @@ int main(int argc, char** argv){
     //     }
     // }
 
-    ygm::container::map<std::pair<int, int>, int> matrix_C(world); 
+
+    ygm::container::map<map_key, int> matrix_C(world); 
     test_COO.spGemm(unsorted_matrix, matrix_C);
     world.barrier();
     double global_end = MPI_Wtime();    
@@ -115,8 +149,8 @@ int main(int argc, char** argv){
    
 
     ygm::container::bag<Edge> global_bag_C(world);
-    matrix_C.for_all([&global_bag_C](std::pair<int, int> coord, int product){
-        global_bag_C.async_insert({coord.first, coord.second, product});
+    matrix_C.for_all([&global_bag_C](map_key coord, int product){
+        global_bag_C.async_insert({coord.x, coord.y, product});
     });
     world.barrier();
 
@@ -152,7 +186,7 @@ int main(int argc, char** argv){
         if (result == 0) {
             std::cout << "Files match!\n";
             std::filesystem::remove(
-                        "../strong_scaling_output/amazon_results/" +
+                        "../strong_scaling_output/epinions_results/" +
                         std::to_string(nodes) + 
                         "_nodes_difference.txt"
                     );

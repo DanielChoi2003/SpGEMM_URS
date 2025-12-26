@@ -62,11 +62,11 @@ template <class Matrix, class Accumulator>
 inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_accum){
     int mult_count = 0;
     int add_count = 0;
+    world.cout("partitioned size: ", unsorted_matrix.local_size());
     world.stats_reset();
 
     shm_counting_set cache(world, partial_accum);
-    world.barrier();
-    auto multiplier = [&cache, &mult_count, &add_count](auto self, auto pmap, int input_value, int input_row, int input_column){
+    auto multiplier = [&cache, &mult_count, &add_count](auto self, int input_value, int input_row, int input_column){
          // find the first Edge with matching row to input_column with std::lower_bound
         int low = 0;
         int high = self->local_size;
@@ -93,11 +93,11 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
 
             // NOTE: could potentially overflow with large values
             int product = input_value * match_edge.value; // valueB * valueA;
-            mult_count++;
 
             if(product == 0){
                 continue;
             }
+            mult_count++;
             // auto adder = [](const std::pair<int, int> &coord, int &partial_product, int value_add){
             //     partial_product += value_add;
             // };
@@ -112,11 +112,14 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
         int input_column = ed.col;
         int input_row = ed.row;
         int input_value = ed.value;
-        async_visit_row(input_column, multiplier, pthis, pmap, input_value, input_row, input_column);
+        async_visit_row(input_column, multiplier, pthis, input_value, input_row, input_column);
     });
+    world.barrier();
+    cache.value_cache_flush_all();
+    world.barrier();
     world.stats_print();
     world.cout("number of multiplication: ", mult_count, ", number of addition: ", add_count);
-    world.barrier();
+
 }
 
 inline void Sorted_COO::print_metadata(){
