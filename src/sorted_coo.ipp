@@ -61,12 +61,19 @@ inline void Sorted_COO::async_visit_row(
 template <class Matrix, class Accumulator>
 inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_accum){
     int mult_count = 0;
+    auto mult_count_ptr = world.make_ygm_ptr(mult_count);
     int add_count = 0;
-    world.cout("partitioned size: ", unsorted_matrix.local_size());
+    auto add_count_ptr = world.make_ygm_ptr(add_count);
+
+    //world.cout("partitioned size: ", unsorted_matrix.local_size());
     world.stats_reset();
 
-    shm_counting_set cache(world, partial_accum);
-    auto multiplier = [&cache, &mult_count, &add_count](auto self, int input_value, int input_row, int input_column){
+    //world.cout("Before creating cache");
+    //shm_counting_set cache(world, partial_accum);
+    //world.cout("After creating cache");
+    auto multiplier = [](auto pmap, auto self, 
+                        int input_value, int input_row, int input_column,
+                        auto mult_count_ptr, auto add_count_ptr){
          // find the first Edge with matching row to input_column with std::lower_bound
         int low = 0;
         int high = self->local_size;
@@ -97,13 +104,15 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
             if(product == 0){
                 continue;
             }
-            mult_count++;
-            // auto adder = [](const std::pair<int, int> &coord, int &partial_product, int value_add){
-            //     partial_product += value_add;
-            // };
-            // pmap->async_visit({input_row, match_edge.col}, adder, product); // Boost's hasher complains if I use a struct
+            (*mult_count_ptr)++;
+            auto adder = [](const auto &key, auto &partial_product, auto to_add,
+                            auto add_count_ptr){
+                partial_product += to_add;
+                (*add_count_ptr)++;
+            };
+            pmap->async_visit({input_row, match_edge.col}, adder, product, add_count_ptr); // Boost's hasher complains if I use a struct
 
-            cache.cache_insert({input_row, match_edge.col}, product, add_count);
+            //cache.cache_insert({input_row, match_edge.col}, product, add_count);
         }   
     }; 
     
@@ -112,13 +121,16 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
         int input_column = ed.col;
         int input_row = ed.row;
         int input_value = ed.value;
-        async_visit_row(input_column, multiplier, pthis, input_value, input_row, input_column);
+        async_visit_row(input_column, multiplier, 
+                        pmap, pthis, input_value, input_row, input_column,
+                        mult_count_ptr, add_count_ptr);
     });
     world.barrier();
-    cache.value_cache_flush_all();
+    //world.cout("--- before flushing ---");
+    //cache.value_cache_flush_all();
     world.barrier();
     world.stats_print();
-    world.cout("number of multiplication: ", mult_count, ", number of addition: ", add_count);
+    // world.cout("number of multiplication: ", mult_count, ", number of addition: ", add_count);
 
 }
 

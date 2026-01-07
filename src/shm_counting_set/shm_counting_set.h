@@ -12,6 +12,7 @@
 #include <pthread.h>
 #include <ygm/container/detail/base_misc.hpp>
 #include <unistd.h>
+#include <stdio.h>  
 
 
 /*
@@ -57,6 +58,16 @@ private:
         Entry entries[NUM_ENTRIES];
     };
 
+    // custom string object to avoid heap pointers
+    struct m_string{
+        char data[256];
+
+        template <class Archive>
+        void serialize(Archive& ar) {
+            ar(data);
+        }
+    };
+
     static constexpr size_t SHM_SIZE = sizeof(shm_layout);
     
 public:
@@ -81,11 +92,11 @@ public:
         /*
             Create shared memory files
         */
-        m_comm.cout0("alignmnt of pthread_mutex: ", alignof(pthread_mutex_t));
-        m_comm.cout0("alignment of Entry: ", alignof(Entry));
-        m_comm.cout0("size of Entry: ", sizeof(Entry));
-        m_comm.cout0("page size:", sysconf(_SC_PAGESIZE));
-        m_comm.cout0("SHM SIZE: ", SHM_SIZE);
+        // m_comm.cout0("alignmnt of pthread_mutex: ", alignof(pthread_mutex_t));
+        // m_comm.cout0("alignment of Entry: ", alignof(Entry));
+        // m_comm.cout0("size of Entry: ", sizeof(Entry));
+        // m_comm.cout0("page size:", sysconf(_SC_PAGESIZE));
+        //m_comm.cout0("SHM SIZE: ", SHM_SIZE);
 
 
         std::string filename_s = "/BIP_" + std::to_string(m_comm.rank());
@@ -121,37 +132,53 @@ public:
         // fd is no longer needed
         close(fd);
 
+        //m_comm.cout("Rank ", m_comm.rank(), " has finished creating a shm and mapping it");
+        std::vector<m_string> BIP_filenames(m_local_size);
+        auto BIP_filenames_ptr = m_comm.make_ygm_ptr(BIP_filenames);
         m_comm.barrier();
-        std::vector<std::string> BIP_filenames(m_local_size);
         // merge filenames to the local id 0 rank within the same physical node
         /*
             does not require pthis (distributed ygm pointer) because local rank 0 is communicating to processors 
             within the same node, eliminating the need to serialize the lambda.
             *raw pointer cannot be serialized, only ygm pointer can.
         */
-        auto collect_filenames = [this, &BIP_filenames](int local_id, int node_id, int global_rank, std::string filename){
+        auto collect_filenames = [](auto BIP_filenames_ptr, int local_id, int node_id, int global_rank, std::string filename){
             //printf("Rank %d, Received filename %s from local rank %d, global rank %d\n", m_comm.rank(), filename.c_str(), local_id, global_rank);
-            BIP_filenames.at(local_id) = filename;
+            std::vector<m_string> &BIP_filenames = *BIP_filenames_ptr;
+            std::snprintf(BIP_filenames.at(local_id).data, 
+                        sizeof(BIP_filenames.at(local_id).data),
+                        "%s",
+                        filename.c_str());
+            printf("Master rank received filename %s\n", BIP_filenames.at(local_id).data);
         };
         
         int local_rank_zero = m_comm.rank() - m_local_id;
-        m_comm.async(local_rank_zero, collect_filenames, m_local_id, m_node_id, m_comm.rank(), filename_s);
+        //m_comm.cout("Sending to rank ", local_rank_zero);
+        m_comm.async(local_rank_zero, collect_filenames, BIP_filenames_ptr, m_local_id, m_node_id, m_comm.rank(), filename_s);
         m_comm.barrier();
 
+        //m_comm.cout("---- By this line, each master rank should have received their filenames ----");
         // broadcast the filenames (within the same node)
-        auto broadcastBIP = [&BIP_filenames](std::vector<std::string> incoming_filenames){
-            BIP_filenames = incoming_filenames;
+        auto broadcastBIP = [](auto BIP_filenames_ptr, std::vector<m_string> incoming_filenames){
+            *BIP_filenames_ptr = std::move(incoming_filenames);
+            // for(m_string &filename : *BIP_filenames_ptr){
+            //     printf("Rank received filename %s\n", filename.data);
+            // }
         };
+
         if(m_comm.rank() == local_rank_zero){
             for(int i = local_rank_zero + 1; i < local_rank_zero + m_local_size; i++){
                 //m_comm.cout("Sharing filenames to rank ", i);
-                m_comm.async(i, broadcastBIP, BIP_filenames);
+                m_comm.async(i, broadcastBIP, BIP_filenames_ptr, BIP_filenames);
             }
         }
         m_comm.barrier();
 
+        //m_comm.cout("----- By this line, all processes should have received their respective node's SHMs -------");
+
         for(int i = 0; i < BIP_filenames.size(); i++){
-            filename_to_BIP(m_bip_ptrs, i, BIP_filenames[i], SHM_SIZE);
+            std::string str_filename(BIP_filenames[i].data);
+            filename_to_BIP(m_bip_ptrs, i, str_filename, SHM_SIZE);
         }        
 
          // some processes may unlink before others get the chance to shm_open
@@ -172,8 +199,10 @@ public:
             entry->s_key = key_type();
             entry->s_value = -1;
         }
-
+        m_comm.barrier();
         munmap(base, SHM_SIZE);
+
+        //m_comm.cout("--- done with setting up the counting set ---");
     }
 
     ~shm_counting_set() {
@@ -234,6 +263,7 @@ public:
         YGM_ASSERT_DEBUG(cached_value > 0);
 
         // call async visit
+        // m_comm.cout("Pushing cached value ", cached_value, " to key ", key.x, ", ", key.y);
         m_map.async_visit(
             key,
             [](const key_type &key, value_type &partial_product, value_type to_add){
@@ -253,7 +283,7 @@ public:
         shm_layout* header = (shm_layout*)m_bip_ptrs[m_local_id].get();
         Entry* entry = (Entry*)(header->entries);
         //m_comm.cout("locking ", m_comm.rank(), " mutex");
-        pthread_mutex_lock(&(header->mutex));
+        //pthread_mutex_lock(&(header->mutex));
 
         for(int i = 0; i < NUM_ENTRIES; i++){
             if((entry + i)->s_value > 0){
@@ -261,7 +291,7 @@ public:
             }
         }
         //m_comm.cout("unlocking ", m_comm.rank(), " mutex");
-        pthread_mutex_unlock(&(header->mutex));
+        //pthread_mutex_unlock(&(header->mutex));
 
         
     }
@@ -314,6 +344,7 @@ private:
     // OBSOLETE; NO LONGER USING M_CACHE_EMPTY
     bool                                               m_cache_empty = true;
     internal_container_type                            &m_map;
+    typename ygm::ygm_ptr<shm_counting_set>            pthis;
 };
 
 
