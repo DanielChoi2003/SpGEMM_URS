@@ -111,9 +111,11 @@ int main(int argc, char** argv){
     ygm::container::array<Edge> sorted_matrix(world, *bagbp);
     bagbp.reset();
 
-    double global_start = MPI_Wtime();
+    double setup_start = MPI_Wtime();
     Sorted_COO test_COO(world, sorted_matrix);
-    world.barrier();
+    double setup_end = MPI_Wtime();
+    world.cout0("setup time: ", setup_end - setup_start);
+
 
     // if(world.rank() == 3){
     //     test_COO.print_owner_ranks();  
@@ -133,11 +135,12 @@ int main(int argc, char** argv){
 
 
     ygm::container::map<map_key, int> matrix_C(world); 
+    double spgemm_start = MPI_Wtime();
     test_COO.spGemm(unsorted_matrix, matrix_C);
     world.barrier();
-    double global_end = MPI_Wtime();    
+    double spgemm_end = MPI_Wtime();    
     world.cout0("Total number of cores: ", world.size());
-    world.cout0("Overall time (SpGEMM instance construction + matrix multiplication): ", global_end - global_start);
+    world.cout0("matrix multiplication time: ", spgemm_end - spgemm_start);
 
 
     // matrix_C.for_all([](std::pair<int, int> pair, int product){
