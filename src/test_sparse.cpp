@@ -39,7 +39,7 @@ int main(int argc, char** argv){
     ygm::comm world(&argc, &argv);
     static ygm::comm &s_world = world;
     
-    //#define UNDIRECTED_GRAPH
+    #define UNDIRECTED_GRAPH
 
     std::string livejournal =  "/usr/workspace/choi26/com-lj.ungraph.csv";
     std::string amazon = "../data/real_data/undirected_single_edge/com-amazon.ungraph.csv";
@@ -48,8 +48,8 @@ int main(int argc, char** argv){
     std::string amazon_output = "../data/real_results/amazon_numpy_output.csv";
     std::string epinions_output = "../data/real_results/Epinions_numpy_output.csv";
 
-    std::string filename_A = epinions;
-    std::string filename_B = epinions;
+    std::string filename_A = amazon;
+    std::string filename_B = amazon;
 
      // Task 1: data extraction
     auto bagap = std::make_unique<ygm::container::bag<Edge>>(world);
@@ -172,7 +172,7 @@ int main(int argc, char** argv){
         #define CSV_COMPARE
         #ifdef CSV_COMPARE
         std::string output = "./output.csv";
-        std::string expected_output = epinions_output;
+        std::string expected_output = amazon_output;
 
         //"../strong_scaling_output/epinions_results/second_epinions_strong_scaling_${i}_nodes.txt"
         // ignore all: > /dev/null 2>&1
@@ -180,7 +180,7 @@ int main(int argc, char** argv){
         int nodes = world.size() / 32;
         std::string cmd = "diff -y --suppress-common-lines "
                         + output + " " + expected_output + 
-                        " > ../strong_scaling_output/epinions_results/" +
+                        " > ../strong_scaling_output/amazon_results/" +
                         std::to_string(nodes) + "_nodes_difference.txt"; // TESTING
 
         int result = system(cmd.c_str());
@@ -189,7 +189,7 @@ int main(int argc, char** argv){
         if (result == 0) {
             std::cout << "Files match!\n";
             std::filesystem::remove(
-                        "../strong_scaling_output/epinions_results/" +
+                        "../strong_scaling_output/amazon_results/" +
                         std::to_string(nodes) + 
                         "_nodes_difference.txt"
                     );

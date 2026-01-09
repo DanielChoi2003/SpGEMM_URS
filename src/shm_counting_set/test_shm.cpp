@@ -36,7 +36,8 @@ int main(int argc, char **argv){
     shm_counting_set cache(world, accumulator);
 
     int garbo;
-    cache.cache_insert({0, 0}, 1, garbo);
+    auto garb_ptr = world.make_ygm_ptr(garbo);
+    cache.cache_insert({0, 0}, 1, garb_ptr);
     world.barrier();
     cache.value_cache_flush_all();
     world.barrier();
