@@ -19,16 +19,12 @@ using std::vector;
 inline vector<int> Sorted_COO::get_owners(int source){
 
     vector<int> owners;
-    // if the target row number is out of bound, return empty
-    if(source < 0 || source > row_ptrs.size() - 2){
-        return owners; 
+
+    if(row_owners.count(source) == 0){
+        return owners;
     }
-    int start = row_ptrs[source]; 
-    int end = row_ptrs[source+1]; // exclusive
-    while(start < end){
-        owners.push_back(owner_ranks.at(start));
-        start++;
-    }
+
+    owners.assign(row_owners[source].begin(), row_owners[source].end());
     return owners;
 }
 
@@ -136,32 +132,7 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
 
 }
 
-inline void Sorted_COO::print_metadata(){
-    for(int i = 0; i < metadata.size(); i++){
-        world.cout("rank ", i, ": local min " , metadata.at(i).first, ", local max ", metadata.at(i).second);
-    }
-}
-
 inline void Sorted_COO::print_row_owners(){
-    for(int i = 0; i < row_ptrs.size() - 1; i++){
-        int start = row_ptrs[i]; 
-        int end = row_ptrs[i+1];
-        if(start == end){
-            continue;
-        }
-        printf("row %d is owned by rank ", i);
-
-        while(start < end){
-            int owner_rank = owner_ranks.at(start);
-            if(start + 1 == end){
-                printf("%d\n", owner_rank);
-            }
-            else{
-                printf("%d, ", owner_rank);
-            }
-            start++;
-        }
-    }
 }
 
 
