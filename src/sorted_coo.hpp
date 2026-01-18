@@ -43,7 +43,10 @@ public:
         @param ygm::container::array<Edge>& src: array that will be sorted in the constructor.
     */
     explicit Sorted_COO(ygm::comm& c, ygm::container::array<Edge>& src): world(c), pthis(this) {
+        double sort_start = MPI_Wtime();
         src.sort();
+        double sort_end = MPI_Wtime();
+        world.cout0("ygm array sort time: ", sort_end - sort_start);
         // creation of a container requires all ranks to be present
         /*
             temporary set to keep track of nonzero rows.
@@ -67,10 +70,14 @@ public:
         int num_of_processors = world.size();
         metadata.resize(num_of_processors);
 
+        double nnz_start = MPI_Wtime();
         src.local_for_all([this, &nonzero_rows](int index, Edge ed){
             nonzero_rows.async_insert(ed.row);
             lc_sorted_matrix.push_back(ed);
         });
+        double nnz_end = MPI_Wtime();
+        world.cout0("nonzero row construction time: ", nnz_end - nnz_start);
+
 
         local_size = src.local_size();
         //printf("rank %d has %d nonzero elements\n", world.rank(), local_size);
@@ -85,6 +92,7 @@ public:
         }
         
 
+        double gather_bc_start = MPI_Wtime();
         //printf("rank %d: local min %d, local max %d\n", world.rank(), local_min, local_max);
         auto mt_inserter = [](int rank_num, std::pair<int, int> min_max, auto pCoo){
             //printf("Inserting local min %d and local max %d at index %d\n", min_max.first, min_max.second, rank_num);
@@ -105,7 +113,11 @@ public:
             world.async_bcast(broadcastMetadata, metadata, pthis);
         }
         world.barrier(); 
+        double gather_bc_end = MPI_Wtime();
+        world.cout0("Gather and broadcast metadata time: ", gather_bc_end - gather_bc_start);
 
+
+        double row_ptrs_start = MPI_Wtime();
         /*
             problem: missing gaps (row number that is not owned by any rank and not between rank's min & max) will misalign
                     the row_ptrs array.
@@ -145,6 +157,8 @@ public:
         row_ptrs.push_back(owner_ranks.size());
         // don't forget a barrier here since spgemm relies on these metadata.
         world.barrier(); 
+        double row_ptrs_end = MPI_Wtime();
+        world.cout0("row ptrs and owner rank vector initialization time: ", row_ptrs_end - row_ptrs_start);
 
     }
 

@@ -149,7 +149,7 @@ public:
                         sizeof(BIP_filenames.at(local_id).data),
                         "%s",
                         filename.c_str());
-            printf("Master rank received filename %s\n", BIP_filenames.at(local_id).data);
+            //printf("Master rank received filename %s\n", BIP_filenames.at(local_id).data);
         };
         
         int local_rank_zero = m_comm.rank() - m_local_id;
@@ -211,7 +211,7 @@ public:
     }
 
     // NO LONGER USING PRE-BARRIER CALLBACK
-    void cache_insert(const key_type &key, const value_type &value, int &flush_count){
+    void cache_insert(const key_type &key, const value_type &value, ygm::ygm_ptr<int> flush_count){
         int BIP_index = ygm::container::detail::hash<key_type>{}(key) % m_local_size;
         int slot = ygm::container::detail::hash<key_type>{}(key) % NUM_ENTRIES;
         YGM_ASSERT_DEBUG(BIP_index < m_local_size);
@@ -237,7 +237,7 @@ public:
             else{ // different key
                 // flush the slot
                 value_cache_flush(cached_entry);
-                flush_count++;
+                (*flush_count)++;
                 cached_entry->s_key = key;
                 cached_entry->s_value = value;
             }
@@ -245,7 +245,7 @@ public:
         // if the cached value is greater than the value of int32, then flush that slot
         if(cached_entry->s_value >= std::numeric_limits<int32_t>::max() / 2){
             value_cache_flush(cached_entry);
-            flush_count++;
+            (*flush_count)++;
         }
         //m_comm.cout("unlocking local region ", m_node_id * m_local_size + BIP_index);
         pthread_mutex_unlock(&(header->mutex));

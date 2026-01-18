@@ -69,11 +69,13 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
     world.stats_reset();
 
     //world.cout("Before creating cache");
-    //shm_counting_set cache(world, partial_accum);
+    shm_counting_set cache(world, partial_accum);
+    // int cache;
+    auto cache_ptr = world.make_ygm_ptr(cache);
     //world.cout("After creating cache");
     auto multiplier = [](auto pmap, auto self, 
                         int input_value, int input_row, int input_column,
-                        auto mult_count_ptr, auto add_count_ptr){
+                        auto cache_ptr, auto mult_count_ptr, auto add_count_ptr){
          // find the first Edge with matching row to input_column with std::lower_bound
         int low = 0;
         int high = self->local_size;
@@ -110,9 +112,9 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
                 partial_product += to_add;
                 (*add_count_ptr)++;
             };
-            pmap->async_visit({input_row, match_edge.col}, adder, product, add_count_ptr); // Boost's hasher complains if I use a struct
+            // pmap->async_visit({input_row, match_edge.col}, adder, product, add_count_ptr); // Boost's hasher complains if I use a struct
 
-            //cache.cache_insert({input_row, match_edge.col}, product, add_count);
+            (*cache_ptr).cache_insert({input_row, match_edge.col}, product, add_count_ptr);
         }   
     }; 
     
@@ -123,14 +125,14 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
         int input_value = ed.value;
         async_visit_row(input_column, multiplier, 
                         pmap, pthis, input_value, input_row, input_column,
-                        mult_count_ptr, add_count_ptr);
+                        cache_ptr, mult_count_ptr, add_count_ptr);
     });
     world.barrier();
     //world.cout("--- before flushing ---");
-    //cache.value_cache_flush_all();
+    cache.value_cache_flush_all();
     world.barrier();
     world.stats_print();
-    // world.cout("number of multiplication: ", mult_count, ", number of addition: ", add_count);
+    //world.cout("number of multiplication: ", mult_count, ", number of addition: ", add_count);
 
 }
 
