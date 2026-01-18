@@ -39,7 +39,7 @@ int main(int argc, char** argv){
     ygm::comm world(&argc, &argv);
     static ygm::comm &s_world = world;
     
-    #define UNDIRECTED_GRAPH
+    //#define UNDIRECTED_GRAPH
 
     std::string livejournal =  "/usr/workspace/choi26/com-lj.ungraph.csv";
     std::string amazon = "../data/real_data/undirected_single_edge/com-amazon.ungraph.csv";
@@ -48,8 +48,8 @@ int main(int argc, char** argv){
     std::string amazon_output = "../data/real_results/amazon_numpy_output.csv";
     std::string epinions_output = "../data/real_results/Epinions_numpy_output.csv";
 
-    std::string filename_A = amazon;
-    std::string filename_B = amazon;
+    std::string filename_A = livejournal;
+    std::string filename_B = livejournal;
 
      // Task 1: data extraction
     auto bagap = std::make_unique<ygm::container::bag<Edge>>(world);
@@ -58,7 +58,8 @@ int main(int argc, char** argv){
     YGM_ASSERT_RELEASE(file_A.is_open() == true);
     file_A.close();
     ygm::io::csv_parser parser_A(world, files_A);
-    parser_A.for_all([&](ygm::io::detail::csv_line line){ // currently rank 0 is the only one running. is byte partition fixed?
+    // if the data is small, only one rank will participate
+    parser_A.for_all([&](ygm::io::detail::csv_line line){ 
 
         int row = line[0].as_integer();
         int col = line[1].as_integer();
@@ -74,14 +75,8 @@ int main(int argc, char** argv){
         bagap->async_insert(ed);
     });
     world.barrier();
-    // bagap->local_for_all([](Edge &e){
-    //     s_world.cout("bag: ", e.row, ", ", e.col, ", ", e.value);
-    // });
 
     ygm::container::array<Edge> unsorted_matrix(world, *bagap);
-    // unsorted_matrix.local_for_all([](Edge &e){
-    //     s_world.cout("matrix: ", e.row, ", ", e.col, ", ", e.value);
-    // });
     bagap.reset();
 
     // matrix B data extraction
@@ -116,24 +111,6 @@ int main(int argc, char** argv){
     double setup_end = MPI_Wtime();
     world.cout0("setup time: ", setup_end - setup_start);
 
-
-    // if(world.rank() == 3){
-    //     test_COO.print_owner_ranks();  
-    // }
-    // if(world.rank() == 3){
-    //     test_COO.print_row_ptrs();
-    // }
-
-    
-    // int source = 8;
-    // if(world.rank0()){
-    //     std::vector<int> owners = test_COO.get_owners(source);
-    //     for(int owner_rank : owners){
-    //         world.cout("Rank ", owner_rank, " owns row ", source);
-    //     }
-    // }
-
-
     ygm::container::map<map_key, int> matrix_C(world); 
     double spgemm_start = MPI_Wtime();
     test_COO.spGemm(unsorted_matrix, matrix_C);
@@ -142,12 +119,7 @@ int main(int argc, char** argv){
     world.cout0("Total number of cores: ", world.size());
     world.cout0("matrix multiplication time: ", spgemm_end - spgemm_start);
 
-
-    // matrix_C.for_all([](std::pair<int, int> pair, int product){
-    //     printf("%d, %d, %d\n", pair.first, pair.second, product);
-    // });
-
-    #define MATRIX_OUTPUT
+    //#define MATRIX_OUTPUT
     #ifdef MATRIX_OUTPUT
    
 
@@ -172,7 +144,7 @@ int main(int argc, char** argv){
         #define CSV_COMPARE
         #ifdef CSV_COMPARE
         std::string output = "./output.csv";
-        std::string expected_output = amazon_output;
+        std::string expected_output = epinions_output;
 
         //"../strong_scaling_output/epinions_results/second_epinions_strong_scaling_${i}_nodes.txt"
         // ignore all: > /dev/null 2>&1
@@ -180,7 +152,7 @@ int main(int argc, char** argv){
         int nodes = world.size() / 32;
         std::string cmd = "diff -y --suppress-common-lines "
                         + output + " " + expected_output + 
-                        " > ../strong_scaling_output/amazon_results/" +
+                        " > ../strong_scaling_output/epinions_results/" +
                         std::to_string(nodes) + "_nodes_difference.txt"; // TESTING
 
         int result = system(cmd.c_str());
@@ -189,7 +161,7 @@ int main(int argc, char** argv){
         if (result == 0) {
             std::cout << "Files match!\n";
             std::filesystem::remove(
-                        "../strong_scaling_output/amazon_results/" +
+                        "../strong_scaling_output/epinions_results/" +
                         std::to_string(nodes) + 
                         "_nodes_difference.txt"
                     );

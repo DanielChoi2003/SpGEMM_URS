@@ -346,6 +346,3 @@ private:
     internal_container_type                            &m_map;
     typename ygm::ygm_ptr<shm_counting_set>            pthis;
 };
-
-
-#include "shm_counting_set.ipp"

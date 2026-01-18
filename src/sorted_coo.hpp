@@ -6,11 +6,15 @@
 #include <ygm/container/counting_set.hpp>
 #include <ygm/io/csv_parser.hpp>
 #include <ygm/container/bag.hpp>
+#include <cereal/types/unordered_set.hpp> // to support serializing unordered set
 #include <fstream>
 #include <iostream>
 #include <algorithm>
 #include <cassert>
 #include <vector>
+#include <unordered_map>
+#include <unordered_set>
+
 
 using map_index = std::pair<int, int>;
 
@@ -43,163 +47,56 @@ public:
         @param ygm::container::array<Edge>& src: array that will be sorted in the constructor.
     */
     explicit Sorted_COO(ygm::comm& c, ygm::container::array<Edge>& src): world(c), pthis(this) {
+        pthis.check(world);
+
         double sort_start = MPI_Wtime();
         src.sort();
         double sort_end = MPI_Wtime();
         world.cout0("ygm array sort time: ", sort_end - sort_start);
-        // creation of a container requires all ranks to be present
-        /*
-            temporary set to keep track of nonzero rows.
-            To be used when checking middle row between min and max rows.
-        */
-        ygm::container::counting_set<int> nonzero_rows(world);
-        pthis.check(world);
-        /*
-            index = rank number
-            pair<minimum row number, maximum row number> the rank holds
-            get the minimum and maximum row number that each processor holds
+        
+        local_size = src.local_size();
+        // {key, value}: {row number, set of owners}
 
-            to gather/merge, you can either use:
-            1. a distributed data structure, then call gather on it
-            2. use rank 0's local data structure, call async to rank 0, 
-                insert the data into index that matches the caller rank's id.
-                Then rank 0 broadcasts to all other ranks
-        */
-       // does comm::size() implicitly call barrier()?
-       // array.size() contains a barrier()
-        int num_of_processors = world.size();
-        metadata.resize(num_of_processors);
+        double map_start = MPI_Wtime();
+        ygm::container::map<int, std::unordered_set<int>> global_row_owners(world);
 
-        double nnz_start = MPI_Wtime();
-        src.local_for_all([this, &nonzero_rows](int index, Edge ed){
-            nonzero_rows.async_insert(ed.row);
+        src.for_all([this, &global_row_owners](int index, Edge &ed){
+            global_row_owners.async_visit(ed.row, [](int key, std::unordered_set<int> &owners, int rank){
+                owners.insert(rank);
+            }, world.rank());
             lc_sorted_matrix.push_back(ed);
         });
-        double nnz_end = MPI_Wtime();
-        world.cout0("nonzero row construction time: ", nnz_end - nnz_start);
+        world.barrier(); 
+        double map_end = MPI_Wtime();
+        world.cout0("row-owner map initialization time: ", map_end - map_start);
 
 
-        local_size = src.local_size();
-        //printf("rank %d has %d nonzero elements\n", world.rank(), local_size);
-        // it may have zero nnz elements
-        if(!lc_sorted_matrix.empty()){
-            local_min = lc_sorted_matrix.front().row;
-            local_max = lc_sorted_matrix.back().row;
-        }
-        else{
-            local_min = INT_MAX;
-            local_max = INT_MIN;
-        }
-        
-
-        double gather_bc_start = MPI_Wtime();
-        //printf("rank %d: local min %d, local max %d\n", world.rank(), local_min, local_max);
-        auto mt_inserter = [](int rank_num, std::pair<int, int> min_max, auto pCoo){
-            //printf("Inserting local min %d and local max %d at index %d\n", min_max.first, min_max.second, rank_num);
-            pCoo->metadata.at(rank_num) = min_max;
+        double merge_start = MPI_Wtime();
+        auto merge_row_owners = [](int row, std::unordered_set<int> owners, auto self){
+            self->row_owners[row] = owners;
         };
-        // if local_min is greater than local_max (meaning the rank does not own any elements), then don't add it to metadata
-        if(local_min <= local_max){
-            world.async(0, mt_inserter, world.rank(), std::make_pair(local_min, local_max), pthis);
+        global_row_owners.for_all([this, merge_row_owners](int const &key, std::unordered_set<int> const &owners){
+            world.async(0, merge_row_owners, key, owners, pthis);
+        });
+        world.barrier();
+        double merge_end = MPI_Wtime();
+        world.cout0("merge row-owner data time: ", merge_end - merge_start);
+
+        double bc_start = MPI_Wtime();
+        auto broadcast_owners = [](std::unordered_map<int, std::unordered_set<int>> owners, auto self){
+            self->row_owners = owners;
+        };
+        if(world.rank0()){
+            world.async_bcast(broadcast_owners, row_owners, pthis);
         }
         world.barrier();
-
-        //now broadcast it to all other ranks
-        auto broadcastMetadata = [this](std::vector<std::pair<int, int>> incoming_metadata, auto pCOO){
-            pCOO->metadata = incoming_metadata;
-        };
-
-        if(world.rank0()){
-            world.async_bcast(broadcastMetadata, metadata, pthis);
-        }
-        world.barrier(); 
-        double gather_bc_end = MPI_Wtime();
-        world.cout0("Gather and broadcast metadata time: ", gather_bc_end - gather_bc_start);
-
-
-        double row_ptrs_start = MPI_Wtime();
-        /*
-            problem: missing gaps (row number that is not owned by any rank and not between rank's min & max) will misalign
-                    the row_ptrs array.
-                    Also if the row number does not start with zero, it also gets misaligned by one index.
-        */
-        int global_min = metadata.empty() ? 0 : metadata.front().first;
-        // pad the row_ptrs array, so the first row number can access the correct owners (uses index as the row number)
-        for(int k = 0; k < global_min; k++){
-            row_ptrs.push_back(owner_ranks.size());
-        }
-        int previous_row = global_min - 1;
-        for(int i = 0; i < metadata.size(); i++){ // i is the owner rank
-            int current_row = metadata[i].first;
-
-            /*
-                fill gaps between previous rank's max row number
-                and the current rank's min row number.
-                ex: min max
-                0: [0, 3]
-                1: [6, 9]
-                missing row numbers: 4, 5
-            */ 
-            for(int j = previous_row + 1; j < current_row; j++){
-                row_ptrs.push_back(owner_ranks.size());
-            }
-            while(current_row <= metadata[i].second){
-                if(previous_row != current_row){
-                    row_ptrs.push_back(owner_ranks.size());
-                }
-                if(nonzero_rows.count(current_row) != 0){
-                    owner_ranks.push_back(i);
-                }
-                previous_row = current_row;
-                current_row++;
-            }
-        }
-        row_ptrs.push_back(owner_ranks.size());
-        // don't forget a barrier here since spgemm relies on these metadata.
-        world.barrier(); 
-        double row_ptrs_end = MPI_Wtime();
-        world.cout0("row ptrs and owner rank vector initialization time: ", row_ptrs_end - row_ptrs_start);
+        double bc_end = MPI_Wtime();
+        world.cout0("broadcast row-owner data time: ", bc_end - bc_start);
 
     }
-
-    /*
-        @brief 
-            prints each rank's metadata vector. A test case function to ensure that 
-            each rank contains the same global data.
-    */
-    void print_metadata();
 
     void print_row_owners();
 
-    void print_row_ptrs(){
-        printf("row_ptrs: ");
-        for(int i = 0; i < row_ptrs.size(); i++){
-            if(i == 0){
-                printf("[ %d, ", row_ptrs.at(i));
-            }
-            else if (i == row_ptrs.size() - 1){
-                printf("%d ]\n", row_ptrs.at(i));
-            }
-            else{
-                printf("%d, ", row_ptrs.at(i));
-            }
-        }
-    }
-
-    void print_owner_ranks(){
-        printf("owner_ranks: ");
-        for(int i = 0; i < owner_ranks.size(); i++){
-            if(i == 0){
-                printf("[ %d, ", owner_ranks.at(i));
-            }
-            else if (i == owner_ranks.size() - 1){
-                printf("%d ]\n", owner_ranks.at(i));
-            }
-            else{
-                printf("%d, ", owner_ranks.at(i));
-            }
-        }
-    }
     /*
         @brief 
             gets the owners of the row number that matches to the given argument "source".
@@ -244,23 +141,10 @@ public:
 
 
 private:
-    /*
-        contains each processor's min and max source number (row number)
-    */
-    std::vector<std::pair<int, int>> metadata;
-    /*
-        CSR data structure for O(1) lookup
-    */
-    std::vector<int> owner_ranks;
-    std::vector<int> row_ptrs;
-    std::vector<int> nonzero_rows;
-
-
+    std::unordered_map<int, std::unordered_set<int>> row_owners;
+    std::vector<Edge> lc_sorted_matrix;
     int local_size = -1;
-    int local_min = -1;
-    int local_max = -1;
     ygm::comm &world;                            // store the communicator. Hence the &
-    std::vector<Edge> lc_sorted_matrix;  // store the local sorted matrix
     typename ygm::ygm_ptr<Sorted_COO> pthis;
 };
 
