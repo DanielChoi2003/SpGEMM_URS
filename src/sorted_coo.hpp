@@ -1,8 +1,9 @@
 #pragma once
-#include "shm_counting_set/shm_counting_set.h"
+#include "proc_cache/proc_cache.hpp"
 #include <ygm/comm.hpp>
 #include <ygm/container/map.hpp>
 #include <ygm/container/array.hpp>
+#include <ygm/container/set.hpp>
 #include <ygm/container/counting_set.hpp>
 #include <ygm/io/csv_parser.hpp>
 #include <ygm/container/bag.hpp>
@@ -15,8 +16,31 @@
 #include <unordered_map>
 #include <unordered_set>
 
+struct map_key{
+    int x;
+    int y;
 
-using map_index = std::pair<int, int>;
+    bool operator==(const map_key& other) const {
+        return x == other.x && y == other.y;
+    }
+
+    template <class Archive>
+    void serialize(Archive& ar) {
+        ar(x, y);
+    }
+};
+
+/*
+    std::pair is not trivially copyable -> need to use struct ->
+    requires custom hashing for the struct as std::pair is no longer
+    used
+*/
+std::size_t hash_value(map_key const& key) {
+  std::size_t seed = 0;
+  boost::hash_combine(seed, key.x);
+  boost::hash_combine(seed, key.y);
+  return seed;
+}
 
 struct Edge{
     int row;
@@ -46,7 +70,7 @@ public:
         @param ygm::comm&: communicator object
         @param ygm::container::array<Edge>& src: array that will be sorted in the constructor.
     */
-    explicit Sorted_COO(ygm::comm& c, ygm::container::array<Edge>& src): world(c), pthis(this) {
+    explicit Sorted_COO(ygm::comm& c, ygm::container::array<Edge>& src): world(c), global_sorted_matrix(src), pthis(this) {
         pthis.check(world);
 
         double sort_start = MPI_Wtime();
@@ -106,7 +130,7 @@ public:
     std::vector<int> get_owners(int source);
 
    
-    /*
+    /**
         @brief
             finds the set of owners (ranks) that contains elements with the matching row number.
             The caller of this function calls the owner(s) by providing the column number, row number, and
@@ -142,6 +166,7 @@ public:
 
 private:
     std::unordered_map<int, std::unordered_set<int>> row_owners;
+    ygm::container::array<Edge>& global_sorted_matrix;
     std::vector<Edge> lc_sorted_matrix;
     int local_size = -1;
     ygm::comm &world;                            // store the communicator. Hence the &

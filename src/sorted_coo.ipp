@@ -60,15 +60,19 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
     auto mult_count_ptr = world.make_ygm_ptr(mult_count);
     int add_count = 0;
     auto add_count_ptr = world.make_ygm_ptr(add_count);
-
-    //world.cout("partitioned size: ", unsorted_matrix.local_size());
     world.stats_reset();
 
-    //world.cout("Before creating cache");
-    shm_counting_set cache(world, partial_accum);
-    // int cache;
+    // int local_nnz = unsorted_matrix.local_size();
+    // ygm::container::set<int> unique_rows(world);
+    // global_sorted_matrix.for_all([&unique_rows](Edge &ed){
+    //     unique_rows.async_insert(ed.row);
+    // });
+    world.barrier();
+    //int global_row_number = unique_rows.size();
+
+    proc_cache cache(world, partial_accum);
+    //int cache;
     auto cache_ptr = world.make_ygm_ptr(cache);
-    //world.cout("After creating cache");
     auto multiplier = [](auto pmap, auto self, 
                         int input_value, int input_row, int input_column,
                         auto cache_ptr, auto mult_count_ptr, auto add_count_ptr){
@@ -108,9 +112,10 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
                 partial_product += to_add;
                 (*add_count_ptr)++;
             };
+            // uncomment this to test without cache
             // pmap->async_visit({input_row, match_edge.col}, adder, product, add_count_ptr); // Boost's hasher complains if I use a struct
 
-            (*cache_ptr).cache_insert({input_row, match_edge.col}, product, add_count_ptr);
+            (*cache_ptr).cache_insert({input_row, match_edge.col}, product);
         }   
     }; 
     
@@ -124,9 +129,7 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
                         cache_ptr, mult_count_ptr, add_count_ptr);
     });
     world.barrier();
-    //world.cout("--- before flushing ---");
-    cache.value_cache_flush_all();
-    world.barrier();
+    cache.cache_flush_all();
     world.stats_print();
     //world.cout("number of multiplication: ", mult_count, ", number of addition: ", add_count);
 
