@@ -16,15 +16,31 @@ using std::vector;
 /*
     Member functions defined inside the class body are implicitly inline.
 */
+
 inline vector<int> Sorted_COO::get_owners(int source){
 
     vector<int> owners;
+    auto comp_second = [](const std::pair<int, int>& lhs, int val) {
+        return lhs.second < val;
+    };  
+   
+    auto it = std::lower_bound(row_owners.begin(), row_owners.end(), source, comp_second);
 
-    if(row_owners.count(source) == 0){
-        return owners;
+    // if it is equal to the end iterator, then theres no owner
+    if(it != row_owners.end()){
+        int owner_rank = it - row_owners.begin();
+        
+        while(owner_rank < row_owners.size()){
+            if(row_owners[owner_rank].first <= source){
+                owners.push_back(owner_rank);
+                owner_rank++;
+            }
+            else{
+                break;
+            }
+        }
     }
-
-    owners.assign(row_owners[source].begin(), row_owners[source].end());
+    
     return owners;
 }
 
@@ -44,8 +60,8 @@ inline void Sorted_COO::async_visit_row(
     vector<int> owners = get_owners(target_row);
     for(int owner_rank : owners){
         //printf("Row %d is owned by rank %d\n", target_row, owner_rank);
-        assert(owner_rank >= 0 && owner_rank < world.size());
-        world.async(owner_rank, vlambda, args...);
+        assert(owner_rank >= 0 && owner_rank < m_comm.size());
+        m_comm.async(owner_rank, vlambda, args...);
     }
     
     //DO NOT CALL BARRIER HERE. PROCESSOR NEEDS TO BE ABLE TO RUN MULTIPLE TIMES.
@@ -57,22 +73,16 @@ inline void Sorted_COO::async_visit_row(
 template <class Matrix, class Accumulator>
 inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_accum){
     int mult_count = 0;
-    auto mult_count_ptr = world.make_ygm_ptr(mult_count);
+    auto mult_count_ptr = m_comm.make_ygm_ptr(mult_count);
     int add_count = 0;
-    auto add_count_ptr = world.make_ygm_ptr(add_count);
-    world.stats_reset();
+    auto add_count_ptr = m_comm.make_ygm_ptr(add_count);
+    m_comm.stats_reset();
 
-    int local_nnz = unsorted_matrix.local_size();
-    ygm::container::set<int> unique_rows(world);
-    global_sorted_matrix.for_all([&unique_rows](Edge &ed){
-        unique_rows.async_insert(ed.row);
-    });
-    world.barrier();
-    int global_row_number = unique_rows.size();
+    m_comm.barrier();
 
-    //proc_cache cache(world, partial_accum, global_sorted_matrix.size(), global_row_number, local_nnz);
+    //proc_cache cache(m_comm, partial_accum, global_sorted_matrix.size(), global_row_number, local_nnz);
     int cache;
-    auto cache_ptr = world.make_ygm_ptr(cache);
+    auto cache_ptr = m_comm.make_ygm_ptr(cache);
     auto multiplier = [](auto pmap, auto self, 
                         int input_value, int input_row, int input_column,
                         auto cache_ptr, auto mult_count_ptr, auto add_count_ptr){
@@ -128,10 +138,11 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
                         pmap, pthis, input_value, input_row, input_column,
                         cache_ptr, mult_count_ptr, add_count_ptr);
     });
-    world.barrier();
+    m_comm.barrier();
     //cache.cache_flush_all();
-    world.stats_print();
-    //world.cout("number of multiplication: ", mult_count, ", number of addition: ", add_count);
+    m_comm.stats_print();
+    //cache.cache_print();
+    //m_comm.cout("number of multiplication: ", mult_count, ", number of addition: ", add_count);
 
 }
 

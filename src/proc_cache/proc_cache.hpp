@@ -38,9 +38,10 @@ public:
         // if a rank owns 10 entries, then each entry will multiply with the entire matching row
         // so in average, how many multiplications will a rank perform?
         unsigned long estimated_entries = local_entries * avg_deg;
-        double deduplication_factor = 0.5; 
+        double deduplication_factor = 0.3; 
         // estimated number of distinct number of multiplication pairs (i, j)
         unsigned long estimated_size = estimated_entries * deduplication_factor;
+        m_cache.reserve(NUM_ENTRIES);
 
     }
 
@@ -54,6 +55,7 @@ public:
         auto it = m_cache.find(key);
         if(it != m_cache.end()){
             m_cache.at(key) += value;
+            local_accumulate++;
         }
         else{
             m_cache.insert({key, value});
@@ -89,15 +91,18 @@ public:
         if (!m_cache_empty) {
             for (auto &p : m_cache) {
                 cache_flush(p.first);
-                global_flush++;
             }
-            // m_comm.cout("local accumulate: ", local_accumulate, 
-            //             ", local flush: ", local_flush, 
-            //             ", global flush: ", global_flush);
             m_cache.clear();
-            m_cache.rehash(0);
+            //m_cache.rehash(0);
             m_cache_empty = true;
+            global_flush++;
         }
+    }
+
+    void cache_print(){
+        m_comm.cout("local accumulate: ", local_accumulate, 
+                        ", local flush: ", local_flush, 
+                        ", global flush: ", global_flush);
     }
 
 

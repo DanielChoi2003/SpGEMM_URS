@@ -5,16 +5,12 @@
 #include <ygm/container/array.hpp>
 #include <ygm/container/set.hpp>
 #include <ygm/container/counting_set.hpp>
-#include <ygm/io/csv_parser.hpp>
-#include <ygm/container/bag.hpp>
 #include <cereal/types/unordered_set.hpp> // to support serializing unordered set
 #include <fstream>
 #include <iostream>
 #include <algorithm>
 #include <cassert>
 #include <vector>
-#include <unordered_map>
-#include <unordered_set>
 
 struct map_key{
     int x;
@@ -70,52 +66,53 @@ public:
         @param ygm::comm&: communicator object
         @param ygm::container::array<Edge>& src: array that will be sorted in the constructor.
     */
-    explicit Sorted_COO(ygm::comm& c, ygm::container::array<Edge>& src): world(c), global_sorted_matrix(src), pthis(this) {
-        pthis.check(world);
+    explicit Sorted_COO(ygm::comm& c, ygm::container::array<Edge>& src,
+                        size_t top_k,
+                        std::vector<std::pair<int, size_t>> top_rows, 
+                        std::vector<std::pair<int, size_t>> top_cols): m_comm(c), pthis(this), top_k(top_k), top_rows(top_rows), top_cols(top_cols)
+                        
+    {
+        pthis.check(m_comm);
+        row_owners.resize(m_comm.size());
 
         double sort_start = MPI_Wtime();
         src.sort();
         double sort_end = MPI_Wtime();
-        world.cout0("ygm array sort time: ", sort_end - sort_start);
+        m_comm.cout0("ygm array sort time: ", sort_end - sort_start);
         
         local_size = src.local_size();
         // {key, value}: {row number, set of owners}
 
         double map_start = MPI_Wtime();
-        ygm::container::map<int, std::unordered_set<int>> global_row_owners(world);
 
-        src.for_all([this, &global_row_owners](int index, Edge &ed){
-            global_row_owners.async_visit(ed.row, [](int key, std::unordered_set<int> &owners, int rank){
-                owners.insert(rank);
-            }, world.rank());
-            lc_sorted_matrix.push_back(ed);
+        src.for_all([this](int index, Edge &ed){
+            this->lc_sorted_matrix.push_back(ed);
         });
-        world.barrier(); 
+        m_comm.barrier(); 
         double map_end = MPI_Wtime();
-        world.cout0("row-owner map initialization time: ", map_end - map_start);
-
+        m_comm.cout0("row-owner map initialization time: ", map_end - map_start);
 
         double merge_start = MPI_Wtime();
-        auto merge_row_owners = [](int row, std::unordered_set<int> owners, auto self){
-            self->row_owners[row] = owners;
+        auto populate_row_owners = [](std::pair<int, int> min_max, int rank, auto self){
+            self->row_owners[rank] = min_max;
         };
-        global_row_owners.for_all([this, merge_row_owners](int const &key, std::unordered_set<int> const &owners){
-            world.async(0, merge_row_owners, key, owners, pthis);
-        });
-        world.barrier();
+        m_comm.async(0, populate_row_owners, 
+                    std::make_pair(lc_sorted_matrix.front().row, lc_sorted_matrix.back().row), 
+                    m_comm.rank(), pthis);
+        m_comm.barrier();
         double merge_end = MPI_Wtime();
-        world.cout0("merge row-owner data time: ", merge_end - merge_start);
+        m_comm.cout0("merge row-owner data time: ", merge_end - merge_start);
 
         double bc_start = MPI_Wtime();
-        auto broadcast_owners = [](std::unordered_map<int, std::unordered_set<int>> owners, auto self){
+        auto broadcast_owners = [](std::vector<std::pair<int, int>> owners, auto self){
             self->row_owners = owners;
         };
-        if(world.rank0()){
-            world.async_bcast(broadcast_owners, row_owners, pthis);
+        if(m_comm.rank0()){
+            m_comm.async_bcast(broadcast_owners, row_owners, pthis);
         }
-        world.barrier();
+        m_comm.barrier();
         double bc_end = MPI_Wtime();
-        world.cout0("broadcast row-owner data time: ", bc_end - bc_start);
+        m_comm.cout0("broadcast row-owner data time: ", bc_end - bc_start);
 
     }
 
@@ -165,12 +162,14 @@ public:
 
 
 private:
-    std::unordered_map<int, std::unordered_set<int>> row_owners;
-    ygm::container::array<Edge>& global_sorted_matrix;
+    ygm::comm &m_comm;                            // store the communicator. Hence the &
+    typename ygm::ygm_ptr<Sorted_COO> pthis;
+    size_t top_k;
+    std::vector<std::pair<int, size_t>> top_rows, top_cols;
+
+    std::vector<std::pair<int, int>> row_owners;
     std::vector<Edge> lc_sorted_matrix;
     int local_size = -1;
-    ygm::comm &world;                            // store the communicator. Hence the &
-    typename ygm::ygm_ptr<Sorted_COO> pthis;
 };
 
 

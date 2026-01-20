@@ -1,7 +1,7 @@
 #include "sorted_coo.hpp"
+#include <ygm/container/bag.hpp>
 #include <ygm/io/csv_parser.hpp>
 #include <stdio.h>
-#include <mpi.h>
 #include <cstdlib>
 #include <string>
 #include <filesystem>
@@ -24,11 +24,12 @@ int main(int argc, char** argv){
     std::string amazon_output = "../data/real_results/amazon_numpy_output.csv";
     std::string epinions_output = "../data/real_results/Epinions_numpy_output.csv";
 
-    std::string filename_A = livejournal;
-    std::string filename_B = livejournal;
+    std::string filename_A = epinions;
+    std::string filename_B = epinions;
 
      // Task 1: data extraction
     auto bagap = std::make_unique<ygm::container::bag<Edge>>(world);
+    ygm::container::counting_set<int> top_cols(world);
     std::vector<std::string> files_A= {filename_A};
     std::fstream file_A(files_A[0]);
     YGM_ASSERT_RELEASE(file_A.is_open() == true);
@@ -46,9 +47,11 @@ int main(int argc, char** argv){
         #ifdef UNDIRECTED_GRAPH
             Edge rev = {col, row, value};
             bagap->async_insert(rev);
+            top_cols.async_insert(row);
         #endif
         Edge ed = {row, col, value};
         bagap->async_insert(ed);
+        top_cols.async_insert(col);
     });
     world.barrier();
 
@@ -57,7 +60,8 @@ int main(int argc, char** argv){
 
     // matrix B data extraction
     auto bagbp = std::make_unique<ygm::container::bag<Edge>>(world);
-     std::vector<std::string> files_B= {filename_B};
+    ygm::container::counting_set<int> top_rows(world);
+    std::vector<std::string> files_B= {filename_B};
     std::fstream file_B(files_B[0]);
     YGM_ASSERT_RELEASE(file_B.is_open() == true);
     file_B.close();
@@ -73,9 +77,11 @@ int main(int argc, char** argv){
         #ifdef UNDIRECTED_GRAPH
             Edge rev = {col, row, value};
             bagbp->async_insert(rev);
+            top_rows.async_insert(col);
         #endif
         Edge ed = {row, col, value};
         bagbp->async_insert(ed);
+        top_rows.async_insert(row);
     });
     world.barrier();
 
@@ -83,7 +89,23 @@ int main(int argc, char** argv){
     bagbp.reset();
 
     double setup_start = MPI_Wtime();
-    Sorted_COO test_COO(world, sorted_matrix);
+    size_t k = 100;
+    auto comp_count = [](const std::pair<int, size_t>& lhs, const std::pair<int, size_t>& rhs){
+        if(lhs.second == rhs.second){
+            return lhs.first < rhs.first;
+        }
+        return lhs.second > rhs.second;
+    };
+    std::vector<std::pair<int, size_t>> ktop_rows = top_rows.gather_topk(k, comp_count);
+    std::vector<std::pair<int, size_t>> ktop_cols = top_cols.gather_topk(k, comp_count);
+    world.barrier();
+    if(world.rank0()){
+        for(auto &p : ktop_rows){
+            printf("row %d with count of %d, ", p.first, p.second);
+        }
+        printf("\n");
+    }
+    Sorted_COO test_COO(world, sorted_matrix, k, ktop_rows, ktop_cols);
     double setup_end = MPI_Wtime();
     world.cout0("setup time: ", setup_end - setup_start);
 
@@ -120,7 +142,7 @@ int main(int argc, char** argv){
         #define CSV_COMPARE
         #ifdef CSV_COMPARE
         std::string output = "./output.csv";
-        std::string expected_output = amazon_output;
+        std::string expected_output = epinions_output;
 
         //"../strong_scaling_output/epinions_results/second_epinions_strong_scaling_${i}_nodes.txt"
         // ignore all: > /dev/null 2>&1
