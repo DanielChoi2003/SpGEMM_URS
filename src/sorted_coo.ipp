@@ -40,7 +40,7 @@ inline vector<int> Sorted_COO::get_owners(int source){
             }
         }
     }
-    
+
     return owners;
 }
 
@@ -80,8 +80,15 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
 
     m_comm.barrier();
 
-    //proc_cache cache(m_comm, partial_accum, global_sorted_matrix.size(), global_row_number, local_nnz);
+    //#define CACHE
+
+    #ifdef CACHE
+    proc_cache cache(m_comm, partial_accum, top_k);
+    #endif
+
+    #ifndef CACHE
     int cache;
+    #endif
     auto cache_ptr = m_comm.make_ygm_ptr(cache);
     auto multiplier = [](auto pmap, auto self, 
                         int input_value, int input_row, int input_column,
@@ -122,10 +129,20 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
                 partial_product += to_add;
                 (*add_count_ptr)++;
             };
-            // uncomment this to test without cache
-            pmap->async_visit({input_row, match_edge.col}, adder, product, add_count_ptr); // Boost's hasher complains if I use a struct
 
-            //(*cache_ptr).cache_insert({input_row, match_edge.col}, product);
+            #ifdef CACHE
+            if(self->top_pairs.count({input_row, match_edge.col})){
+                (*cache_ptr).cache_insert({input_row, match_edge.col}, product);
+            }
+            else{
+                pmap->async_visit({input_row, match_edge.col}, adder, product, add_count_ptr); // Boost's hasher complains if I use a struct
+            }
+            #endif
+
+            #ifndef CACHE
+            pmap->async_visit({input_row, match_edge.col}, adder, product, add_count_ptr); // Boost's hasher complains if I use a struct
+            #endif
+
         }   
     }; 
     
@@ -139,7 +156,9 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
                         cache_ptr, mult_count_ptr, add_count_ptr);
     });
     m_comm.barrier();
-    //cache.cache_flush_all();
+    #ifdef CACHE
+    cache.cache_flush_all();
+    #endif
     m_comm.stats_print();
     //cache.cache_print();
     //m_comm.cout("number of multiplication: ", mult_count, ", number of addition: ", add_count);

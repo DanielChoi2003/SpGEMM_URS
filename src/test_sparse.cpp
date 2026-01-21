@@ -24,8 +24,8 @@ int main(int argc, char** argv){
     std::string amazon_output = "../data/real_results/amazon_numpy_output.csv";
     std::string epinions_output = "../data/real_results/Epinions_numpy_output.csv";
 
-    std::string filename_A = epinions;
-    std::string filename_B = epinions;
+    std::string filename_A = livejournal;
+    std::string filename_B = livejournal;
 
      // Task 1: data extraction
     auto bagap = std::make_unique<ygm::container::bag<Edge>>(world);
@@ -47,11 +47,11 @@ int main(int argc, char** argv){
         #ifdef UNDIRECTED_GRAPH
             Edge rev = {col, row, value};
             bagap->async_insert(rev);
-            top_cols.async_insert(row);
+            top_cols.async_insert(col);
         #endif
         Edge ed = {row, col, value};
         bagap->async_insert(ed);
-        top_cols.async_insert(col);
+        top_cols.async_insert(row);
     });
     world.barrier();
 
@@ -77,11 +77,11 @@ int main(int argc, char** argv){
         #ifdef UNDIRECTED_GRAPH
             Edge rev = {col, row, value};
             bagbp->async_insert(rev);
-            top_rows.async_insert(col);
+            top_rows.async_insert(row);
         #endif
         Edge ed = {row, col, value};
         bagbp->async_insert(ed);
-        top_rows.async_insert(row);
+        top_rows.async_insert(col);
     });
     world.barrier();
 
@@ -99,12 +99,6 @@ int main(int argc, char** argv){
     std::vector<std::pair<int, size_t>> ktop_rows = top_rows.gather_topk(k, comp_count);
     std::vector<std::pair<int, size_t>> ktop_cols = top_cols.gather_topk(k, comp_count);
     world.barrier();
-    if(world.rank0()){
-        for(auto &p : ktop_rows){
-            printf("row %d with count of %d, ", p.first, p.second);
-        }
-        printf("\n");
-    }
     Sorted_COO test_COO(world, sorted_matrix, k, ktop_rows, ktop_cols);
     double setup_end = MPI_Wtime();
     world.cout0("setup time: ", setup_end - setup_start);
@@ -120,7 +114,6 @@ int main(int argc, char** argv){
     //#define MATRIX_OUTPUT
     #ifdef MATRIX_OUTPUT
    
-
     ygm::container::bag<Edge> global_bag_C(world);
     matrix_C.for_all([&global_bag_C](map_key coord, int product){
         global_bag_C.async_insert({coord.x, coord.y, product});
@@ -142,7 +135,7 @@ int main(int argc, char** argv){
         #define CSV_COMPARE
         #ifdef CSV_COMPARE
         std::string output = "./output.csv";
-        std::string expected_output = epinions_output;
+        std::string expected_output = amazon_output;
 
         //"../strong_scaling_output/epinions_results/second_epinions_strong_scaling_${i}_nodes.txt"
         // ignore all: > /dev/null 2>&1

@@ -6,6 +6,7 @@
 #include <ygm/container/set.hpp>
 #include <ygm/container/counting_set.hpp>
 #include <cereal/types/unordered_set.hpp> // to support serializing unordered set
+#include <boost/unordered/unordered_flat_map.hpp>
 #include <fstream>
 #include <iostream>
 #include <algorithm>
@@ -69,11 +70,15 @@ public:
     explicit Sorted_COO(ygm::comm& c, ygm::container::array<Edge>& src,
                         size_t top_k,
                         std::vector<std::pair<int, size_t>> top_rows, 
-                        std::vector<std::pair<int, size_t>> top_cols): m_comm(c), pthis(this), top_k(top_k), top_rows(top_rows), top_cols(top_cols)
+                        std::vector<std::pair<int, size_t>> top_cols): m_comm(c), pthis(this), top_k(top_k)
                         
     {
         pthis.check(m_comm);
         row_owners.resize(m_comm.size());
+
+        for(int i = 0; i < top_k; i++){
+            top_pairs.insert({top_rows[i].first, top_cols[i].first});
+        }
 
         double sort_start = MPI_Wtime();
         src.sort();
@@ -165,7 +170,7 @@ private:
     ygm::comm &m_comm;                            // store the communicator. Hence the &
     typename ygm::ygm_ptr<Sorted_COO> pthis;
     size_t top_k;
-    std::vector<std::pair<int, size_t>> top_rows, top_cols;
+    boost::unordered_flat_set<std::pair<int, int>> top_pairs;
 
     std::vector<std::pair<int, int>> row_owners;
     std::vector<Edge> lc_sorted_matrix;
