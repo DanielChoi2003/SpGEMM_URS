@@ -160,7 +160,6 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
     cache.cache_flush_all();
     #endif
     m_comm.stats_print();
-    //cache.cache_print();
     //m_comm.cout("number of multiplication: ", mult_count, ", number of addition: ", add_count);
 
 }

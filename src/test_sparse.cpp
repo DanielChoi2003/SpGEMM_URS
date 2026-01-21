@@ -15,7 +15,7 @@ int main(int argc, char** argv){
     ygm::comm world(&argc, &argv);
     static ygm::comm &s_world = world;
     
-    //#define UNDIRECTED_GRAPH
+    #define UNDIRECTED_GRAPH
 
     std::string livejournal =  "/usr/workspace/choi26/com-lj.ungraph.csv";
     std::string amazon = "../data/real_data/undirected_single_edge/com-amazon.ungraph.csv";
@@ -24,12 +24,12 @@ int main(int argc, char** argv){
     std::string amazon_output = "../data/real_results/amazon_numpy_output.csv";
     std::string epinions_output = "../data/real_results/Epinions_numpy_output.csv";
 
-    std::string filename_A = livejournal;
-    std::string filename_B = livejournal;
+    std::string filename_A = amazon;
+    std::string filename_B = amazon;
 
      // Task 1: data extraction
     auto bagap = std::make_unique<ygm::container::bag<Edge>>(world);
-    ygm::container::counting_set<int> top_cols(world);
+    ygm::container::counting_set<int> top_rows(world);
     std::vector<std::string> files_A= {filename_A};
     std::fstream file_A(files_A[0]);
     YGM_ASSERT_RELEASE(file_A.is_open() == true);
@@ -44,14 +44,15 @@ int main(int argc, char** argv){
         if(line.size() == 3){
            value = line[2].as_integer();
         }
+        // what about self directed edge?
         #ifdef UNDIRECTED_GRAPH
             Edge rev = {col, row, value};
             bagap->async_insert(rev);
-            top_cols.async_insert(col);
+            top_rows.async_insert(col);
         #endif
         Edge ed = {row, col, value};
         bagap->async_insert(ed);
-        top_cols.async_insert(row);
+        top_rows.async_insert(row);
     });
     world.barrier();
 
@@ -60,7 +61,7 @@ int main(int argc, char** argv){
 
     // matrix B data extraction
     auto bagbp = std::make_unique<ygm::container::bag<Edge>>(world);
-    ygm::container::counting_set<int> top_rows(world);
+    ygm::container::counting_set<int> top_cols(world);
     std::vector<std::string> files_B= {filename_B};
     std::fstream file_B(files_B[0]);
     YGM_ASSERT_RELEASE(file_B.is_open() == true);
@@ -77,11 +78,11 @@ int main(int argc, char** argv){
         #ifdef UNDIRECTED_GRAPH
             Edge rev = {col, row, value};
             bagbp->async_insert(rev);
-            top_rows.async_insert(row);
+            top_cols.async_insert(row);
         #endif
         Edge ed = {row, col, value};
         bagbp->async_insert(ed);
-        top_rows.async_insert(col);
+        top_cols.async_insert(col);
     });
     world.barrier();
 
@@ -96,8 +97,8 @@ int main(int argc, char** argv){
         }
         return lhs.second > rhs.second;
     };
-    std::vector<std::pair<int, size_t>> ktop_rows = top_rows.gather_topk(k, comp_count);
     std::vector<std::pair<int, size_t>> ktop_cols = top_cols.gather_topk(k, comp_count);
+    std::vector<std::pair<int, size_t>> ktop_rows = top_rows.gather_topk(k, comp_count);
     world.barrier();
     Sorted_COO test_COO(world, sorted_matrix, k, ktop_rows, ktop_cols);
     double setup_end = MPI_Wtime();
@@ -111,7 +112,7 @@ int main(int argc, char** argv){
     world.cout0("Total number of cores: ", world.size());
     world.cout0("matrix multiplication time: ", spgemm_end - spgemm_start);
 
-    //#define MATRIX_OUTPUT
+    #define MATRIX_OUTPUT
     #ifdef MATRIX_OUTPUT
    
     ygm::container::bag<Edge> global_bag_C(world);

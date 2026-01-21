@@ -77,7 +77,9 @@ public:
         row_owners.resize(m_comm.size());
 
         for(int i = 0; i < top_k; i++){
-            top_pairs.insert({top_rows[i].first, top_cols[i].first});
+            for(int j = 0; j < top_k; j++){
+                top_pairs.insert({top_rows[i].first, top_cols[j].first});
+            }
         }
 
         double sort_start = MPI_Wtime();

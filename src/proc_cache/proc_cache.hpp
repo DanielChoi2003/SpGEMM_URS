@@ -49,15 +49,11 @@ public:
                 m_cache[slot].second += value;
             } else {
                 cache_flush(slot);
+                eviction++;
                 YGM_ASSERT_DEBUG(m_cache[slot].second == -1);
                 m_cache[slot].first  = key;
                 m_cache[slot].second = value;
             }
-        }
-        // if the cached value is greater than the value of int64, then flush that slot
-        // need to consider cases in which values are negative, but assume positive values for now.
-        if(m_cache[slot].second >= std::numeric_limits<int64_t>::max() / 2){
-            cache_flush(slot);
         }
     }
 
@@ -88,13 +84,12 @@ public:
             for (size_t i = 0; i < m_cache.size(); i++) {
                 if (m_cache[i].second > 0) {
                     cache_flush(i);
-                    global_flush++;
                 }
             }
             m_cache_empty = true;
             m_comm.cout("local accumulate: ", local_accumulate, 
                         ", local flush: ", local_flush, 
-                        ", global flush: ", global_flush);
+                        ", eviction: ", eviction);
         }
     }
 
@@ -107,5 +102,5 @@ private:
     internal_container_type                      &m_map;
     int                                          local_accumulate = 0;
     int                                          local_flush = 0;
-    int                                          global_flush = 0;
+    int                                          eviction = 0;
 };
