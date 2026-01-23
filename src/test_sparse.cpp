@@ -145,7 +145,7 @@ int main(int argc, char** argv){
         std::string cmd = "diff -y --suppress-common-lines "
                         + output + " " + expected_output + 
                         " > ../strong_scaling_output/epinions_results/" +
-                        std::to_string(nodes) + "_nodes_difference.txt"; // TESTING
+                        std::to_string(nodes) + "_nodes_difference.txt";
 
         int result = system(cmd.c_str());
 

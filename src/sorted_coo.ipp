@@ -63,8 +63,6 @@ inline void Sorted_COO::async_visit_row(
         assert(owner_rank >= 0 && owner_rank < m_comm.size());
         m_comm.async(owner_rank, vlambda, args...);
     }
-    
-    //DO NOT CALL BARRIER HERE. PROCESSOR NEEDS TO BE ABLE TO RUN MULTIPLE TIMES.
 }
 
 
@@ -112,7 +110,7 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
 
         // keep multiplying with the next Edge until the row number no longer matches
         for(int i = low; i < upper_bound; i++){
-            const Edge &match_edge = self->lc_sorted_matrix.at(i);  
+            const Edge &match_edge = self->lc_sorted_matrix[i];  
             if(match_edge.row != input_column){
                 break;
             }
