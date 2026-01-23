@@ -15,7 +15,7 @@ int main(int argc, char** argv){
     ygm::comm world(&argc, &argv);
     static ygm::comm &s_world = world;
     
-    #define UNDIRECTED_GRAPH
+    //#define UNDIRECTED_GRAPH
 
     std::string livejournal =  "/usr/workspace/choi26/com-lj.ungraph.csv";
     std::string amazon = "../data/real_data/undirected_single_edge/com-amazon.ungraph.csv";
@@ -24,8 +24,8 @@ int main(int argc, char** argv){
     std::string amazon_output = "../data/real_results/amazon_numpy_output.csv";
     std::string epinions_output = "../data/real_results/Epinions_numpy_output.csv";
 
-    std::string filename_A = amazon;
-    std::string filename_B = amazon;
+    std::string filename_A = livejournal;
+    std::string filename_B = livejournal;
 
      // Task 1: data extraction
     auto bagap = std::make_unique<ygm::container::bag<Edge>>(world);
@@ -112,7 +112,7 @@ int main(int argc, char** argv){
     world.cout0("Total number of cores: ", world.size());
     world.cout0("matrix multiplication time: ", spgemm_end - spgemm_start);
 
-    #define MATRIX_OUTPUT
+    //#define MATRIX_OUTPUT
     #ifdef MATRIX_OUTPUT
    
     ygm::container::bag<Edge> global_bag_C(world);

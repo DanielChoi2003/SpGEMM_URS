@@ -7,6 +7,7 @@
 #include <ygm/container/counting_set.hpp>
 #include <cereal/types/unordered_set.hpp> // to support serializing unordered set
 #include <boost/unordered/unordered_flat_map.hpp>
+#include <ygm/container/detail/block_partitioner.hpp> // for local_start() and local_end()
 #include <fstream>
 #include <iostream>
 #include <algorithm>
@@ -70,7 +71,7 @@ public:
     explicit Sorted_COO(ygm::comm& c, ygm::container::array<Edge>& src,
                         size_t top_k,
                         std::vector<std::pair<int, size_t>> top_rows, 
-                        std::vector<std::pair<int, size_t>> top_cols): m_comm(c), pthis(this), top_k(top_k)
+                        std::vector<std::pair<int, size_t>> top_cols): m_comm(c), sorted_matrix(src), pthis(this), top_k(top_k)
                         
     {
         pthis.check(m_comm);
@@ -81,20 +82,13 @@ public:
                 top_pairs.insert({top_rows[i].first, top_cols[j].first});
             }
         }
-
         double sort_start = MPI_Wtime();
-        src.sort();
+        sorted_matrix.sort();
         double sort_end = MPI_Wtime();
         m_comm.cout0("ygm array sort time: ", sort_end - sort_start);
         
-        local_size = src.local_size();
-        // {key, value}: {row number, set of owners}
-
         double map_start = MPI_Wtime();
 
-        src.for_all([this](int index, Edge &ed){
-            this->lc_sorted_matrix.push_back(ed);
-        });
         m_comm.barrier(); 
         double map_end = MPI_Wtime();
         m_comm.cout0("row-owner map initialization time: ", map_end - map_start);
@@ -103,8 +97,16 @@ public:
         auto populate_row_owners = [](std::pair<int, int> min_max, int rank, auto self){
             self->row_owners[rank] = min_max;
         };
+
+        int first = sorted_matrix.local_cbegin().operator*().value.row;
+        int last = -1;
+        auto curr = sorted_matrix.local_cbegin();
+        for(;curr != sorted_matrix.local_cend(); curr.operator++()){
+            last = curr.operator*().value.row;
+        }
+
         m_comm.async(0, populate_row_owners, 
-                    std::make_pair(lc_sorted_matrix.front().row, lc_sorted_matrix.back().row), 
+                    std::make_pair(first, last), 
                     m_comm.rank(), pthis);
         m_comm.barrier();
         double merge_end = MPI_Wtime();
@@ -170,13 +172,12 @@ public:
 
 private:
     ygm::comm &m_comm;                            // store the communicator. Hence the &
+    ygm::container::array<Edge> &sorted_matrix;
     typename ygm::ygm_ptr<Sorted_COO> pthis;
     size_t top_k;
     boost::unordered_flat_set<std::pair<int, int>> top_pairs;
 
     std::vector<std::pair<int, int>> row_owners;
-    std::vector<Edge> lc_sorted_matrix;
-    int local_size = -1;
 };
 
 

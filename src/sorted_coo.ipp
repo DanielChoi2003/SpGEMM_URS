@@ -92,13 +92,18 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
                         int input_value, int input_row, int input_column,
                         auto cache_ptr, auto mult_count_ptr, auto add_count_ptr){
          // find the first Edge with matching row to input_column with std::lower_bound
-        int low = 0;
-        int high = self->local_size;
+        int low = self->sorted_matrix.partitioner.local_start();
+        int high = low + self->sorted_matrix.partitioner.local_size();
         int upper_bound = high;
 
         while (low < high) {
             int mid = low + (high - low) / 2;
-            const Edge &mid_edge = self->lc_sorted_matrix[mid];
+
+            Edge mid_edge = {};
+            // local visit expects a global index. internally, converts it into a local index: 0 to local size
+            self->sorted_matrix.local_visit(mid, [&mid_edge](int index, Edge &edge){
+                mid_edge = edge;
+            });
 
             if (mid_edge.row < input_column) { // the edge with matching row has to be to the right of mid
                 low = mid + 1;
@@ -110,7 +115,10 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
 
         // keep multiplying with the next Edge until the row number no longer matches
         for(int i = low; i < upper_bound; i++){
-            const Edge &match_edge = self->lc_sorted_matrix[i];  
+            Edge match_edge = {};  
+            self->sorted_matrix.local_visit(i, [&match_edge](int index, Edge &edge){
+                match_edge = edge;
+            });
             if(match_edge.row != input_column){
                 break;
             }
