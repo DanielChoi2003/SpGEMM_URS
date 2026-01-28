@@ -16,15 +16,31 @@ using std::vector;
 /*
     Member functions defined inside the class body are implicitly inline.
 */
+
 inline vector<int> Sorted_COO::get_owners(int source){
 
     vector<int> owners;
+    auto comp_second = [](const std::pair<int, int>& lhs, int val) {
+        return lhs.second < val;
+    };  
+   
+    auto it = std::lower_bound(row_owners.begin(), row_owners.end(), source, comp_second);
 
-    if(row_owners.count(source) == 0){
-        return owners;
+    // if it is equal to the end iterator, then theres no owner
+    if(it != row_owners.end()){
+        int owner_rank = it - row_owners.begin();
+        
+        while(owner_rank < row_owners.size()){
+            if(row_owners[owner_rank].first <= source){
+                owners.push_back(owner_rank);
+                owner_rank++;
+            }
+            else{
+                break;
+            }
+        }
     }
 
-    owners.assign(row_owners[source].begin(), row_owners[source].end());
     return owners;
 }
 
@@ -44,11 +60,9 @@ inline void Sorted_COO::async_visit_row(
     vector<int> owners = get_owners(target_row);
     for(int owner_rank : owners){
         //printf("Row %d is owned by rank %d\n", target_row, owner_rank);
-        assert(owner_rank >= 0 && owner_rank < world.size());
-        world.async(owner_rank, vlambda, args...);
+        assert(owner_rank >= 0 && owner_rank < m_comm.size());
+        m_comm.async(owner_rank, vlambda, args...);
     }
-    
-    //DO NOT CALL BARRIER HERE. PROCESSOR NEEDS TO BE ABLE TO RUN MULTIPLE TIMES.
 }
 
 
@@ -57,29 +71,39 @@ inline void Sorted_COO::async_visit_row(
 template <class Matrix, class Accumulator>
 inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_accum){
     int mult_count = 0;
-    auto mult_count_ptr = world.make_ygm_ptr(mult_count);
+    auto mult_count_ptr = m_comm.make_ygm_ptr(mult_count);
     int add_count = 0;
-    auto add_count_ptr = world.make_ygm_ptr(add_count);
+    auto add_count_ptr = m_comm.make_ygm_ptr(add_count);
+    m_comm.stats_reset();
 
-    //world.cout("partitioned size: ", unsorted_matrix.local_size());
-    world.stats_reset();
+    m_comm.barrier();
 
-    //world.cout("Before creating cache");
-    shm_counting_set cache(world, partial_accum);
-    // int cache;
-    auto cache_ptr = world.make_ygm_ptr(cache);
-    //world.cout("After creating cache");
+    //#define CACHE
+
+    #ifdef CACHE
+    proc_cache cache(m_comm, partial_accum, top_k);
+    #endif
+
+    #ifndef CACHE
+    int cache;
+    #endif
+    auto cache_ptr = m_comm.make_ygm_ptr(cache);
     auto multiplier = [](auto pmap, auto self, 
                         int input_value, int input_row, int input_column,
                         auto cache_ptr, auto mult_count_ptr, auto add_count_ptr){
          // find the first Edge with matching row to input_column with std::lower_bound
-        int low = 0;
-        int high = self->local_size;
+        int low = self->sorted_matrix.partitioner.local_start();
+        int high = low + self->sorted_matrix.partitioner.local_size();
         int upper_bound = high;
 
         while (low < high) {
             int mid = low + (high - low) / 2;
-            const Edge &mid_edge = self->lc_sorted_matrix[mid];
+
+            Edge mid_edge = {};
+            // local visit expects a global index. internally, converts it into a local index: 0 to local size
+            self->sorted_matrix.local_visit(mid, [&mid_edge](int index, Edge &edge){
+                mid_edge = edge;
+            });
 
             if (mid_edge.row < input_column) { // the edge with matching row has to be to the right of mid
                 low = mid + 1;
@@ -91,7 +115,10 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
 
         // keep multiplying with the next Edge until the row number no longer matches
         for(int i = low; i < upper_bound; i++){
-            const Edge &match_edge = self->lc_sorted_matrix.at(i);  
+            Edge match_edge = {};  
+            self->sorted_matrix.local_visit(i, [&match_edge](int index, Edge &edge){
+                match_edge = edge;
+            });
             if(match_edge.row != input_column){
                 break;
             }
@@ -108,9 +135,20 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
                 partial_product += to_add;
                 (*add_count_ptr)++;
             };
-            // pmap->async_visit({input_row, match_edge.col}, adder, product, add_count_ptr); // Boost's hasher complains if I use a struct
 
-            (*cache_ptr).cache_insert({input_row, match_edge.col}, product, add_count_ptr);
+            #ifdef CACHE
+            if(self->top_pairs.count({input_row, match_edge.col})){
+                (*cache_ptr).cache_insert({input_row, match_edge.col}, product);
+            }
+            else{
+                pmap->async_visit({input_row, match_edge.col}, adder, product, add_count_ptr); // Boost's hasher complains if I use a struct
+            }
+            #endif
+
+            #ifndef CACHE
+            pmap->async_visit({input_row, match_edge.col}, adder, product, add_count_ptr); // Boost's hasher complains if I use a struct
+            #endif
+
         }   
     }; 
     
@@ -123,12 +161,12 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
                         pmap, pthis, input_value, input_row, input_column,
                         cache_ptr, mult_count_ptr, add_count_ptr);
     });
-    world.barrier();
-    //world.cout("--- before flushing ---");
-    cache.value_cache_flush_all();
-    world.barrier();
-    world.stats_print();
-    //world.cout("number of multiplication: ", mult_count, ", number of addition: ", add_count);
+    m_comm.barrier();
+    #ifdef CACHE
+    cache.cache_flush_all();
+    #endif
+    m_comm.stats_print();
+    //m_comm.cout("number of multiplication: ", mult_count, ", number of addition: ", add_count);
 
 }
 

@@ -1,22 +1,44 @@
 #pragma once
-#include "shm_counting_set/shm_counting_set.h"
+#include "proc_cache/proc_cache.hpp"
 #include <ygm/comm.hpp>
 #include <ygm/container/map.hpp>
 #include <ygm/container/array.hpp>
+#include <ygm/container/set.hpp>
 #include <ygm/container/counting_set.hpp>
-#include <ygm/io/csv_parser.hpp>
-#include <ygm/container/bag.hpp>
 #include <cereal/types/unordered_set.hpp> // to support serializing unordered set
+#include <boost/unordered/unordered_flat_map.hpp>
+#include <ygm/container/detail/block_partitioner.hpp> // for local_start() and local_end()
 #include <fstream>
 #include <iostream>
 #include <algorithm>
 #include <cassert>
 #include <vector>
-#include <unordered_map>
-#include <unordered_set>
 
+struct map_key{
+    int x;
+    int y;
 
-using map_index = std::pair<int, int>;
+    bool operator==(const map_key& other) const {
+        return x == other.x && y == other.y;
+    }
+
+    template <class Archive>
+    void serialize(Archive& ar) {
+        ar(x, y);
+    }
+};
+
+/*
+    std::pair is not trivially copyable -> need to use struct ->
+    requires custom hashing for the struct as std::pair is no longer
+    used
+*/
+std::size_t hash_value(map_key const& key) {
+  std::size_t seed = 0;
+  boost::hash_combine(seed, key.x);
+  boost::hash_combine(seed, key.y);
+  return seed;
+}
 
 struct Edge{
     int row;
@@ -46,52 +68,60 @@ public:
         @param ygm::comm&: communicator object
         @param ygm::container::array<Edge>& src: array that will be sorted in the constructor.
     */
-    explicit Sorted_COO(ygm::comm& c, ygm::container::array<Edge>& src): world(c), pthis(this) {
-        pthis.check(world);
+    explicit Sorted_COO(ygm::comm& c, ygm::container::array<Edge>& src,
+                        size_t top_k,
+                        std::vector<std::pair<int, size_t>> top_rows, 
+                        std::vector<std::pair<int, size_t>> top_cols): m_comm(c), sorted_matrix(src), pthis(this), top_k(top_k)
+                        
+    {
+        pthis.check(m_comm);
+        row_owners.resize(m_comm.size());
 
+        for(int i = 0; i < top_k; i++){
+            for(int j = 0; j < top_k; j++){
+                top_pairs.insert({top_rows[i].first, top_cols[j].first});
+            }
+        }
         double sort_start = MPI_Wtime();
-        src.sort();
+        sorted_matrix.sort();
         double sort_end = MPI_Wtime();
-        world.cout0("ygm array sort time: ", sort_end - sort_start);
+        m_comm.cout0("ygm array sort time: ", sort_end - sort_start);
         
-        local_size = src.local_size();
-        // {key, value}: {row number, set of owners}
-
         double map_start = MPI_Wtime();
-        ygm::container::map<int, std::unordered_set<int>> global_row_owners(world);
 
-        src.for_all([this, &global_row_owners](int index, Edge &ed){
-            global_row_owners.async_visit(ed.row, [](int key, std::unordered_set<int> &owners, int rank){
-                owners.insert(rank);
-            }, world.rank());
-            lc_sorted_matrix.push_back(ed);
-        });
-        world.barrier(); 
+        m_comm.barrier(); 
         double map_end = MPI_Wtime();
-        world.cout0("row-owner map initialization time: ", map_end - map_start);
-
+        m_comm.cout0("row-owner map initialization time: ", map_end - map_start);
 
         double merge_start = MPI_Wtime();
-        auto merge_row_owners = [](int row, std::unordered_set<int> owners, auto self){
-            self->row_owners[row] = owners;
+        auto populate_row_owners = [](std::pair<int, int> min_max, int rank, auto self){
+            self->row_owners[rank] = min_max;
         };
-        global_row_owners.for_all([this, merge_row_owners](int const &key, std::unordered_set<int> const &owners){
-            world.async(0, merge_row_owners, key, owners, pthis);
-        });
-        world.barrier();
+
+        int first = sorted_matrix.local_cbegin().operator*().value.row;
+        int last = -1;
+        auto curr = sorted_matrix.local_cbegin();
+        for(;curr != sorted_matrix.local_cend(); curr.operator++()){
+            last = curr.operator*().value.row;
+        }
+
+        m_comm.async(0, populate_row_owners, 
+                    std::make_pair(first, last), 
+                    m_comm.rank(), pthis);
+        m_comm.barrier();
         double merge_end = MPI_Wtime();
-        world.cout0("merge row-owner data time: ", merge_end - merge_start);
+        m_comm.cout0("merge row-owner data time: ", merge_end - merge_start);
 
         double bc_start = MPI_Wtime();
-        auto broadcast_owners = [](std::unordered_map<int, std::unordered_set<int>> owners, auto self){
+        auto broadcast_owners = [](std::vector<std::pair<int, int>> owners, auto self){
             self->row_owners = owners;
         };
-        if(world.rank0()){
-            world.async_bcast(broadcast_owners, row_owners, pthis);
+        if(m_comm.rank0()){
+            m_comm.async_bcast(broadcast_owners, row_owners, pthis);
         }
-        world.barrier();
+        m_comm.barrier();
         double bc_end = MPI_Wtime();
-        world.cout0("broadcast row-owner data time: ", bc_end - bc_start);
+        m_comm.cout0("broadcast row-owner data time: ", bc_end - bc_start);
 
     }
 
@@ -106,7 +136,7 @@ public:
     std::vector<int> get_owners(int source);
 
    
-    /*
+    /**
         @brief
             finds the set of owners (ranks) that contains elements with the matching row number.
             The caller of this function calls the owner(s) by providing the column number, row number, and
@@ -141,11 +171,13 @@ public:
 
 
 private:
-    std::unordered_map<int, std::unordered_set<int>> row_owners;
-    std::vector<Edge> lc_sorted_matrix;
-    int local_size = -1;
-    ygm::comm &world;                            // store the communicator. Hence the &
+    ygm::comm &m_comm;                            // store the communicator. Hence the &
+    ygm::container::array<Edge> &sorted_matrix;
     typename ygm::ygm_ptr<Sorted_COO> pthis;
+    size_t top_k;
+    boost::unordered_flat_set<std::pair<int, int>> top_pairs;
+
+    std::vector<std::pair<int, int>> row_owners;
 };
 
 

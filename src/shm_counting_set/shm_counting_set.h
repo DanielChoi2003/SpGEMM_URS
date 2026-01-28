@@ -296,6 +296,7 @@ public:
         
     }
 
+
 private:
 
     struct MMapDestructor{
@@ -340,9 +341,6 @@ private:
     std::vector<std::unique_ptr<void, MMapDestructor>> m_bip_ptrs;
     int                                                m_local_id = -1;
     int                                                m_node_id = -1;
-
-    // OBSOLETE; NO LONGER USING M_CACHE_EMPTY
-    bool                                               m_cache_empty = true;
     internal_container_type                            &m_map;
     typename ygm::ygm_ptr<shm_counting_set>            pthis;
 };
