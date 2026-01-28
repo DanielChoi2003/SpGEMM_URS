@@ -16,16 +16,18 @@ int main(int argc, char** argv){
     static ygm::comm &s_world = world;
     
     //#define UNDIRECTED_GRAPH
+    // uncomment this if you want a AA multiplication but A is not a square
+    #define TRANSPOSE 
 
     std::string livejournal =  "/usr/workspace/choi26/com-lj.ungraph.csv";
-    std::string amazon = "../data/real_data/undirected_single_edge/com-amazon.ungraph.csv";
-    std::string epinions = "../data/real_data/directed/soc-Epinions1.csv";
+    std::string amazon = "/usr/workspace/choi26/data/real_data/undirected_single_edge/com-amazon.ungraph.csv";
+    std::string epinions = "/usr/workspace/choi26/data/real_data/directed/soc-Epinions1.csv";
 
-    std::string amazon_output = "../data/real_results/amazon_numpy_output.csv";
-    std::string epinions_output = "../data/real_results/Epinions_numpy_output.csv";
+    std::string amazon_output = "/usr/workspace/choi26/data/real_results/amazon_numpy_output.csv";
+    std::string epinions_output = "/usr/workspace/choi26/data/real_results/Epinions_numpy_output.csv";
 
-    std::string filename_A = livejournal;
-    std::string filename_B = livejournal;
+    std::string filename_A = epinions;
+    std::string filename_B = epinions;
 
      // Task 1: data extraction
     auto bagap = std::make_unique<ygm::container::bag<Edge>>(world);
@@ -75,14 +77,18 @@ int main(int argc, char** argv){
         if(line.size() == 3){
             value = line[2].as_integer();
         }
-        #ifdef UNDIRECTED_GRAPH
+        #if defined(UNDIRECTED_GRAPH) || defined(TRANSPOSE)
             Edge rev = {col, row, value};
             bagbp->async_insert(rev);
             top_cols.async_insert(row);
         #endif
-        Edge ed = {row, col, value};
-        bagbp->async_insert(ed);
-        top_cols.async_insert(col);
+
+
+        #ifndef TRANSPOSE
+            Edge ed = {row, col, value};
+            bagbp->async_insert(ed);
+            top_cols.async_insert(col);
+        #endif
     });
     world.barrier();
 
@@ -112,7 +118,7 @@ int main(int argc, char** argv){
     world.cout0("Total number of cores: ", world.size());
     world.cout0("matrix multiplication time: ", spgemm_end - spgemm_start);
 
-    //#define MATRIX_OUTPUT
+    #define MATRIX_OUTPUT
     #ifdef MATRIX_OUTPUT
    
     ygm::container::bag<Edge> global_bag_C(world);
@@ -133,7 +139,7 @@ int main(int argc, char** argv){
         }
         output_file.close();
 
-        #define CSV_COMPARE
+        //#define CSV_COMPARE
         #ifdef CSV_COMPARE
         std::string output = "./output.csv";
         std::string expected_output = amazon_output;
