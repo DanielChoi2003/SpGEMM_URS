@@ -4,6 +4,7 @@
 #include <ygm/container/map.hpp>
 #include <ygm/detail/ygm_ptr.hpp>
 #include <iostream>
+#include "../sorted_coo.hpp"
 
 
 template <typename Key, typename Value>
@@ -27,10 +28,10 @@ public:
      */
     explicit proc_cache(ygm::comm &c, internal_container_type &accum, size_t top_k) : m_comm(c), m_map(accum), cache_size(top_k * top_k)
     {
-        m_cache.resize(cache_size, {key_type(), -1});
+        m_cache.resize(cache_size, {key_type(), {-1, 0}});
     }
 
-    void cache_insert(const key_type &key, const value_type &value){
+    void cache_insert(const key_type &key, const auto &value){
         if (m_cache_empty) {
             m_cache_empty = false;
             // m_map.comm().register_pre_barrier_callback(
@@ -38,21 +39,21 @@ public:
         }
         int slot = ygm::container::detail::hash<key_type>{}(key) % cache_size;
 
-        if (m_cache[slot].second == -1) {
+        if (m_cache[slot].second.sum == -1) {
             m_cache[slot].first  = key;
-            m_cache[slot].second = value;
+            m_cache[slot].second.sum = value;
         } 
         else {
-            YGM_ASSERT_DEBUG(m_cache[slot].second > 0);
+            YGM_ASSERT_DEBUG(m_cache[slot].second.sum > 0);
             if (m_cache[slot].first == key) {
                 local_accumulate++;
-                m_cache[slot].second += value;
+                m_cache[slot].second.sum += value;
             } else {
                 cache_flush(slot);
                 eviction++;
-                YGM_ASSERT_DEBUG(m_cache[slot].second == -1);
+                YGM_ASSERT_DEBUG(m_cache[slot].second.sum == -1);
                 m_cache[slot].first  = key;
-                m_cache[slot].second = value;
+                m_cache[slot].second.sum = value;
             }
         }
     }
@@ -64,17 +65,18 @@ public:
      */
     void cache_flush(size_t slot){
         auto key          = m_cache[slot].first;
-        auto cached_value = m_cache[slot].second;
+        auto cached_value = m_cache[slot].second.sum;
         YGM_ASSERT_DEBUG(cached_value > 0);
         m_map.async_visit(
             key,
-            [](const key_type &key, value_type &partial_product, value_type to_add){
-                partial_product += to_add;
+            [](const key_type &key, value_type &sum_counter_pair, auto to_add){
+                sum_counter_pair.sum += to_add;
+                sum_counter_pair.push++;
             },
             cached_value
         );
         m_cache[slot].first  = key_type();
-        m_cache[slot].second = -1;
+        m_cache[slot].second.sum = -1;
         local_flush++;
     }   
 
@@ -82,7 +84,7 @@ public:
     void cache_flush_all() {
         if (!m_cache_empty) {
             for (size_t i = 0; i < m_cache.size(); i++) {
-                if (m_cache[i].second > 0) {
+                if (m_cache[i].second.sum > 0) {
                     cache_flush(i);
                 }
             }
@@ -96,7 +98,7 @@ public:
 
 private: 
     ygm::comm                                    &m_comm;
-    std::vector<std::pair<Key, int64_t>>         m_cache;
+    std::vector<std::pair<Key, Value>>         m_cache;
     size_t                                       cache_size;
     bool                                         m_cache_empty = true;
     internal_container_type                      &m_map;

@@ -28,6 +28,16 @@ struct map_key{
     }
 };
 
+struct sum_counter{
+    int sum = 0;
+    int push = 0;
+
+    template <class Archive>
+    void serialize(Archive& ar) {
+        ar(sum, push);
+    }
+};
+
 /*
     std::pair is not trivially copyable -> need to use struct ->
     requires custom hashing for the struct as std::pair is no longer
@@ -98,7 +108,7 @@ public:
             self->row_owners[rank] = min_max;
         };
 
-        int first = sorted_matrix.local_cbegin().operator*().value.row;
+        int first = (*sorted_matrix.local_cbegin()).value.row;
         int last = -1;
         auto curr = sorted_matrix.local_cbegin();
         for(;curr != sorted_matrix.local_cend(); curr.operator++()){
@@ -175,8 +185,15 @@ private:
     ygm::container::array<Edge> &sorted_matrix;
     typename ygm::ygm_ptr<Sorted_COO> pthis;
     size_t top_k;
+    // experiment 2: unordered flat map with pair<i, j> and partial product
+    // 
+    // to do: create uniform generator and rmat generator
+    // make a hybrid generator, e.g. 10% rmat and 90% random (uniform)
+    // make the uniform generator parallel, with each rank having unique seed.
     boost::unordered_flat_set<std::pair<int, int>> top_pairs;
-
+    // experiment 1: two more sets for i and j
+    // instead of checking for double i, j
+    // individually check for i and j to break out early
     std::vector<std::pair<int, int>> row_owners;
 };
 

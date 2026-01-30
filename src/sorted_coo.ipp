@@ -78,7 +78,7 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
 
     m_comm.barrier();
 
-    //#define CACHE
+    #define CACHE
 
     #ifdef CACHE
     proc_cache cache(m_comm, partial_accum, top_k);
@@ -130,9 +130,10 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
                 continue;
             }
             (*mult_count_ptr)++;
-            auto adder = [](const auto &key, auto &partial_product, auto to_add,
+            auto adder = [](const auto &key, auto &sum_counter_pair, auto to_add,
                             auto add_count_ptr){
-                partial_product += to_add;
+                sum_counter_pair.sum += to_add;
+                sum_counter_pair.push++;
                 (*add_count_ptr)++;
             };
 

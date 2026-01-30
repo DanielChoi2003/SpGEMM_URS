@@ -8,8 +8,6 @@
 #include <boost/container_hash/hash.hpp>
 
 
-
-
 int main(int argc, char** argv){
 
     ygm::comm world(&argc, &argv);
@@ -26,8 +24,8 @@ int main(int argc, char** argv){
     std::string amazon_output = "/usr/workspace/choi26/data/real_results/amazon_numpy_output.csv";
     std::string epinions_output = "/usr/workspace/choi26/data/real_results/Epinions_numpy_output.csv";
 
-    std::string filename_A = epinions;
-    std::string filename_B = epinions;
+    std::string filename_A = livejournal;
+    std::string filename_B = livejournal;
 
      // Task 1: data extraction
     auto bagap = std::make_unique<ygm::container::bag<Edge>>(world);
@@ -110,7 +108,7 @@ int main(int argc, char** argv){
     double setup_end = MPI_Wtime();
     world.cout0("setup time: ", setup_end - setup_start);
 
-    ygm::container::map<map_key, pair<int, int>> matrix_C(world); 
+    ygm::container::map<map_key, sum_counter> matrix_C(world); 
     double spgemm_start = MPI_Wtime();
     test_COO.spGemm(unsorted_matrix, matrix_C);
     world.barrier();
@@ -118,7 +116,23 @@ int main(int argc, char** argv){
     world.cout0("Total number of cores: ", world.size());
     world.cout0("matrix multiplication time: ", spgemm_end - spgemm_start);
 
-    #define MATRIX_OUTPUT
+    auto counter_comp = [](auto const &a, auto const &b){
+        if(a.second.push == b.second.push){
+            return a.second.sum > b.second.sum;
+        }
+        return a.second.push > b.second.push;
+    };
+    auto top_k = matrix_C.gather_topk(10, counter_comp);
+
+    world.barrier();
+    if(world.rank0()){
+        for(auto &top_entry : top_k){
+            printf("(%d, %d) had push counter of %d\n", top_entry.first.x, top_entry.first.y, top_entry.second.push);
+        }
+    }
+   
+
+    //#define MATRIX_OUTPUT
     #ifdef MATRIX_OUTPUT
    
     ygm::container::bag<Edge> global_bag_C(world);
