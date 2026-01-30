@@ -9,7 +9,7 @@
 #include <sys/mman.h>   // For shm_open, mmap
 #include <sys/stat.h>        /* For mode constants */
 #include <fcntl.h>           /* For O_* constants */
-#include <pthread.h>
+#include <atomic>
 #include <ygm/container/detail/base_misc.hpp>
 #include <unistd.h>
 #include <stdio.h>  
@@ -29,7 +29,7 @@
 // static_assert
 
 template <typename Key, typename Value>
-class shm_counting_set{
+class shm_cache{
     static_assert(std::is_trivially_copyable_v<Key>);
     static_assert(std::is_trivially_copyable_v<Value>);
 
@@ -54,7 +54,6 @@ private:
     struct shm_layout{
         // 40 bytes big
         // alignment of 8 bytes
-        pthread_mutex_t mutex;
         Entry entries[NUM_ENTRIES];
     };
 
@@ -71,12 +70,12 @@ private:
     static constexpr size_t SHM_SIZE = sizeof(shm_layout);
     
 public:
-    using self_type = shm_counting_set<Key, Value>;
+    using self_type = shm_cache<Key, Value>;
     using internal_container_type = ygm::container::map<Key, Value>;
     using key_type = Key;
     using value_type = Value;
 
-    explicit shm_counting_set(ygm::comm &c, internal_container_type &accum) : 
+    explicit shm_cache(ygm::comm &c, internal_container_type &accum) : 
                             m_comm(c), 
                             m_local_size(m_comm.layout().local_size()),
                             m_local_id(m_comm.layout().local_id()),
@@ -122,13 +121,7 @@ public:
         if(base == MAP_FAILED){
             perror("mapping to *shared* BIP failed\n");
             return;
-        }
-        auto* header = (shm_layout*)base;
-        pthread_mutexattr_t attr;
-        pthread_mutexattr_init(&attr);
-        pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
-        pthread_mutex_init(&header->mutex, &attr);
-        pthread_mutexattr_destroy(&attr);
+        }    
         // fd is no longer needed
         close(fd);
 
@@ -205,9 +198,9 @@ public:
         //m_comm.cout("--- done with setting up the counting set ---");
     }
 
-    ~shm_counting_set() {
+    ~shm_cache() {
         m_comm.barrier();
-        //m_comm.log(log_level::info, "Destroying shm_counting_set");
+        //m_comm.log(log_level::info, "Destroying shm_cache");
     }
 
     // NO LONGER USING PRE-BARRIER CALLBACK
@@ -220,9 +213,12 @@ public:
         shm_layout* header = (shm_layout*)m_bip_ptrs[BIP_index].get();
         Entry* cached_entry = &header->entries[slot];
 
-       // m_comm.cout("locking local region ",  m_node_id * m_local_size + BIP_index);
-        pthread_mutex_lock(&(header->mutex));
-        if(cached_entry->s_value == -1){ 
+        std::atomic<value_type> cas_value{value_type()};
+
+        value_type expected = -1;
+        while(!cas_value.atomic_compare_exchange_weak())
+       
+        if(cas_value.atomic_compare_exchange_weak()){ 
             //m_comm.cout("New entry: Assigning ", value);
             cached_entry->s_key = key;
             cached_entry->s_value = value;
@@ -247,8 +243,6 @@ public:
             value_cache_flush(cached_entry);
             (*flush_count)++;
         }
-        //m_comm.cout("unlocking local region ", m_node_id * m_local_size + BIP_index);
-        pthread_mutex_unlock(&(header->mutex));
     }
 
     /**
@@ -262,7 +256,6 @@ public:
         auto cached_value = entry->s_value;
         YGM_ASSERT_DEBUG(cached_value > 0);
 
-        // call async visit
         // m_comm.cout("Pushing cached value ", cached_value, " to key ", key.x, ", ", key.y);
         m_map.async_visit(
             key,
@@ -282,18 +275,12 @@ public:
             
         shm_layout* header = (shm_layout*)m_bip_ptrs[m_local_id].get();
         Entry* entry = (Entry*)(header->entries);
-        //m_comm.cout("locking ", m_comm.rank(), " mutex");
-        //pthread_mutex_lock(&(header->mutex));
 
         for(int i = 0; i < NUM_ENTRIES; i++){
             if((entry + i)->s_value > 0){
                 value_cache_flush(entry + i);
             }
         }
-        //m_comm.cout("unlocking ", m_comm.rank(), " mutex");
-        //pthread_mutex_unlock(&(header->mutex));
-
-        
     }
 
 
@@ -342,5 +329,5 @@ private:
     int                                                m_local_id = -1;
     int                                                m_node_id = -1;
     internal_container_type                            &m_map;
-    typename ygm::ygm_ptr<shm_counting_set>            pthis;
+    typename ygm::ygm_ptr<shm_cache>            pthis;
 };

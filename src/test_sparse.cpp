@@ -16,7 +16,7 @@ int main(int argc, char** argv){
     static ygm::comm &s_world = world;
     
     //#define UNDIRECTED_GRAPH
-    // uncomment this if you want a AA multiplication but A is not a square
+    // uncomment this if you want a AA multiplication but A is not a square matrix
     #define TRANSPOSE 
 
     std::string livejournal =  "/usr/workspace/choi26/com-lj.ungraph.csv";
@@ -110,7 +110,7 @@ int main(int argc, char** argv){
     double setup_end = MPI_Wtime();
     world.cout0("setup time: ", setup_end - setup_start);
 
-    ygm::container::map<map_key, int> matrix_C(world); 
+    ygm::container::map<map_key, pair<int, int>> matrix_C(world); 
     double spgemm_start = MPI_Wtime();
     test_COO.spGemm(unsorted_matrix, matrix_C);
     world.barrier();

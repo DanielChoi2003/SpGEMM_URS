@@ -170,8 +170,6 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
 
 }
 
-inline void Sorted_COO::print_row_owners(){
-}
 
 
 
