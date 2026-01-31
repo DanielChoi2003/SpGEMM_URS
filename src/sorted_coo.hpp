@@ -88,9 +88,8 @@ public:
         row_owners.resize(m_comm.size());
 
         for(int i = 0; i < top_k; i++){
-            for(int j = 0; j < top_k; j++){
-                top_pairs.insert({top_rows[i].first, top_cols[j].first});
-            }
+            this->top_rows.insert(top_rows[i].first);
+            this->top_cols.insert(top_cols[i].first);
         }
         double sort_start = MPI_Wtime();
         sorted_matrix.sort();
@@ -190,11 +189,14 @@ private:
     // to do: create uniform generator and rmat generator
     // make a hybrid generator, e.g. 10% rmat and 90% random (uniform)
     // make the uniform generator parallel, with each rank having unique seed.
-    boost::unordered_flat_set<std::pair<int, int>> top_pairs;
+    boost::unordered_flat_set<int> top_rows;
+    boost::unordered_flat_set<int> top_cols;
     // experiment 1: two more sets for i and j
     // instead of checking for double i, j
     // individually check for i and j to break out early
     std::vector<std::pair<int, int>> row_owners;
+
+    
 };
 
 

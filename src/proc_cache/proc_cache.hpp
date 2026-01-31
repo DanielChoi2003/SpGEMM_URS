@@ -89,9 +89,9 @@ public:
                 }
             }
             m_cache_empty = true;
-            m_comm.cout("local accumulate: ", local_accumulate, 
-                        ", local flush: ", local_flush, 
-                        ", eviction: ", eviction);
+            // m_comm.cout("local accumulate: ", local_accumulate, 
+            //             ", local flush: ", local_flush, 
+            //             ", eviction: ", eviction);
         }
     }
 

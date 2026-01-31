@@ -138,7 +138,7 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
             };
 
             #ifdef CACHE
-            if(self->top_pairs.count({input_row, match_edge.col})){
+            if(self->top_rows.count(input_row) && self->top_cols.count(match_edge.col)){
                 (*cache_ptr).cache_insert({input_row, match_edge.col}, product);
             }
             else{
