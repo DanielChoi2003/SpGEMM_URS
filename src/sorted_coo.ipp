@@ -80,17 +80,9 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
 
     #define CACHE
 
-    #ifdef CACHE
-    proc_cache cache(m_comm, partial_accum, top_k);
-    #endif
-
-    #ifndef CACHE
-    int cache;
-    #endif
-    auto cache_ptr = m_comm.make_ygm_ptr(cache);
     auto multiplier = [](auto pmap, auto self, 
                         int input_value, int input_row, int input_column,
-                        auto cache_ptr, auto mult_count_ptr, auto add_count_ptr){
+                        auto mult_count_ptr, auto add_count_ptr){
          // find the first Edge with matching row to input_column with std::lower_bound
         int low = self->sorted_matrix.partitioner.local_start();
         int high = low + self->sorted_matrix.partitioner.local_size();
@@ -138,16 +130,19 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
             };
 
             #ifdef CACHE
-            if(self->top_rows.count(input_row) && self->top_cols.count(match_edge.col)){
-                (*cache_ptr).cache_insert({input_row, match_edge.col}, product);
-            }
-            else{
-                pmap->async_visit({input_row, match_edge.col}, adder, product, add_count_ptr); // Boost's hasher complains if I use a struct
-            }
+                if(self->top_rows.count(input_row) && self->top_cols.count(match_edge.col)){
+                    auto [it, inserted] = self->cache.try_emplace({input_row, match_edge.col}, product);
+                    if (!inserted) {
+                        it->second += product;
+                    }
+                }
+                else{
+                    pmap->async_visit({input_row, match_edge.col}, adder, product, add_count_ptr); // Boost's hasher complains if I use a struct
+                }
             #endif
 
             #ifndef CACHE
-            pmap->async_visit({input_row, match_edge.col}, adder, product, add_count_ptr); // Boost's hasher complains if I use a struct
+                pmap->async_visit({input_row, match_edge.col}, adder, product, add_count_ptr); // Boost's hasher complains if I use a struct
             #endif
 
         }   
@@ -160,11 +155,18 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
         int input_value = ed.value;
         async_visit_row(input_column, multiplier, 
                         pmap, pthis, input_value, input_row, input_column,
-                        cache_ptr, mult_count_ptr, add_count_ptr);
+                        mult_count_ptr, add_count_ptr);
     });
     m_comm.barrier();
     #ifdef CACHE
-    cache.cache_flush_all();
+    auto adder = [](const auto &key, auto &sum_counter_pair, auto to_add){
+        sum_counter_pair.sum += to_add;
+        sum_counter_pair.push++;
+    };
+    for (auto& [key, value] : cache) {
+        pmap->async_visit({key.first, key.second}, adder, value);
+    }
+    m_comm.barrier();
     #endif
     m_comm.stats_print();
     //m_comm.cout("number of multiplication: ", mult_count, ", number of addition: ", add_count);

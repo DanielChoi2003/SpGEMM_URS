@@ -1,5 +1,4 @@
 #pragma once
-#include "proc_cache/proc_cache.hpp"
 #include <ygm/comm.hpp>
 #include <ygm/container/map.hpp>
 #include <ygm/container/array.hpp>
@@ -91,6 +90,7 @@ public:
             this->top_rows.insert(top_rows[i].first);
             this->top_cols.insert(top_cols[i].first);
         }
+        cache.reserve(top_k * top_k);
         double sort_start = MPI_Wtime();
         sorted_matrix.sort();
         double sort_end = MPI_Wtime();
@@ -185,7 +185,7 @@ private:
     typename ygm::ygm_ptr<Sorted_COO> pthis;
     size_t top_k;
     // experiment 2: unordered flat map with pair<i, j> and partial product
-    // 
+    boost::unordered_flat_map<std::pair<int, int>, int> cache;
     // to do: create uniform generator and rmat generator
     // make a hybrid generator, e.g. 10% rmat and 90% random (uniform)
     // make the uniform generator parallel, with each rank having unique seed.
