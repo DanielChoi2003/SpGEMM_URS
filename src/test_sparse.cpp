@@ -14,8 +14,8 @@ int main(int argc, char** argv){
     ygm::comm world(&argc, &argv);
     static ygm::comm &s_world = world;
     
-    #define CSV
-    //#define RMAT
+    //#define CSV
+    #define RMAT
 
     #ifdef CSV
         //#define UNDIRECTED_GRAPH
@@ -29,12 +29,12 @@ int main(int argc, char** argv){
         std::string amazon_output = "/usr/workspace/choi26/data/real_results/amazon_numpy_output.csv";
         std::string epinions_output = "/g/g14/choi26/graphBLAS_sandbox/graphblas_epinions_result.csv";
 
-        std::string filename_A = epinions;
-        std::string filename_B = epinions;
+        std::string filename_A = livejournal;
+        std::string filename_B = livejournal;
 
         // Task 1: data extraction
         auto bagap = std::make_unique<ygm::container::bag<Edge>>(world);
-        ygm::container::counting_set<uint64_t> top_rows(world);
+        auto top_row_ptr = std::make_unique<ygm::container::counting_set<uint64_t>>(world);
         std::vector<std::string> files_A= {filename_A};
         std::fstream file_A(files_A[0]);
         YGM_ASSERT_RELEASE(file_A.is_open() == true);
@@ -53,11 +53,11 @@ int main(int argc, char** argv){
             #ifdef UNDIRECTED_GRAPH
                 Edge rev = {col, row, value};
                 bagap->async_insert(rev);
-                top_rows.async_insert(col);
+                top_row_ptr->async_insert(col);
             #endif
             Edge ed = {row, col, value};
             bagap->async_insert(ed);
-            top_rows.async_insert(row);
+            top_row_ptr->async_insert(row);
         });
         world.barrier();
 
@@ -66,7 +66,7 @@ int main(int argc, char** argv){
 
         // matrix B data extraction
         auto bagbp = std::make_unique<ygm::container::bag<Edge>>(world);
-        ygm::container::counting_set<uint64_t> top_cols(world);
+        auto top_col_ptr = std::make_unique<ygm::container::counting_set<uint64_t>>(world);
         std::vector<std::string> files_B= {filename_B};
         std::fstream file_B(files_B[0]);
         YGM_ASSERT_RELEASE(file_B.is_open() == true);
@@ -83,14 +83,14 @@ int main(int argc, char** argv){
             #if defined(UNDIRECTED_GRAPH) || defined(TRANSPOSE)
                 Edge rev = {col, row, value};
                 bagbp->async_insert(rev);
-                top_cols.async_insert(row);
+                top_col_ptr->async_insert(row);
             #endif
 
 
             #ifndef TRANSPOSE
                 Edge ed = {row, col, value};
                 bagbp->async_insert(ed);
-                top_cols.async_insert(col);
+                top_col_ptr->async_insert(col);
             #endif
         });
         world.barrier();
@@ -101,23 +101,34 @@ int main(int argc, char** argv){
     #endif
 
     #ifdef RMAT
-        ygm::container::bag<Edge> unsorted_bag(world);
-        ygm::container::bag<Edge> sorted_bag(world);
-        ygm::container::counting_set<uint64_t> top_rows(world);
-        ygm::container::counting_set<uint64_t> top_cols(world);
-        auto top_row_ptr = world.make_ygm_ptr(top_rows);
-        auto top_col_ptr = world.make_ygm_ptr(top_cols);
+        auto unsorted_bag_ptr = std::make_unique<ygm::container::bag<Edge>>(world);
+        auto sorted_bag_ptr = std::make_unique<ygm::container::bag<Edge>>(world);
+        auto top_row_ptr = std::make_unique<ygm::container::counting_set<uint64_t>>(world);
+        auto top_col_ptr = std::make_unique<ygm::container::counting_set<uint64_t>>(world);
+        auto top_row_ygm_ptr = world.make_ygm_ptr(*top_row_ptr);
+        auto top_col_ygm_ptr = world.make_ygm_ptr(*top_col_ptr);
 
-        rmat_graph_generator rmat_gen_A(world, unsorted_bag, top_row_ptr);
-        rmat_graph_generator rmat_gen_B(world, sorted_bag, top_col_ptr);
+        rmat_graph_generator rmat_gen_A(world, *unsorted_bag_ptr, top_row_ygm_ptr);
+        rmat_graph_generator rmat_gen_B(world, *sorted_bag_ptr, top_col_ygm_ptr);
 
-        rmat_gen_A.generate_rmat_edges(25, 60000000, 0.74, 0.06, 0.1, 0.1, 0.8, true, false, false);
-        rmat_gen_B.generate_rmat_edges(25, 60000000, 0.74, 0.06, 0.1, 0.1, 0.8, false, true, true);
+        int scale = 16;
+        int edge_factor = 10;
+        int edges = pow(2, scale) * edge_factor;
+        double a = 0.57;
+        double b = 0.19;
+        double c = 0.19;
+        double d = 0.05;
+        double rmat_to_uni_ratio = 1.0;
+        rmat_gen_A.generate_rmat_edges(scale, edges, a, b, c, d, rmat_to_uni_ratio, true, false, false);
+        rmat_gen_B.generate_rmat_edges(scale, edges, a, b, c, d, rmat_to_uni_ratio, false, true, true);
 
         world.barrier();
 
-        ygm::container::array<Edge> unsorted_matrix(world, unsorted_bag);
-        ygm::container::array<Edge> sorted_matrix(world, sorted_bag);
+        ygm::container::array<Edge> unsorted_matrix(world, *unsorted_bag_ptr);
+        ygm::container::array<Edge> sorted_matrix(world, *sorted_bag_ptr);
+        // NOTE: YGM::BAG'S CLEAR() DOES NOT DEALLOCATE THE MEMORY/CAPACITY
+        unsorted_bag_ptr.reset();
+        sorted_bag_ptr.reset();
     #endif
 
     double setup_start = MPI_Wtime();
@@ -128,8 +139,10 @@ int main(int argc, char** argv){
         }
         return lhs.second > rhs.second;
     };
-    std::vector<std::pair<uint64_t, size_t>> ktop_cols = top_cols.gather_topk(k, comp_count);
-    std::vector<std::pair<uint64_t, size_t>> ktop_rows = top_rows.gather_topk(k, comp_count);
+    std::vector<std::pair<uint64_t, size_t>> ktop_cols = (*top_col_ptr).gather_topk(k, comp_count);
+    std::vector<std::pair<uint64_t, size_t>> ktop_rows = (*top_row_ptr).gather_topk(k, comp_count);
+    top_row_ptr.reset();
+    top_col_ptr.reset();
     world.barrier();
     Sorted_COO test_COO(world, sorted_matrix, k, ktop_rows, ktop_cols);
     double setup_end = MPI_Wtime();
@@ -143,6 +156,7 @@ int main(int argc, char** argv){
     world.cout0("Total number of cores: ", world.size());
     world.cout0("matrix multiplication time: ", spgemm_end - spgemm_start);
 
+    world.cout0(matrix_C.size());
     auto counter_comp = [](auto const &a, auto const &b){
         if(a.second.push == b.second.push){
             return a.second.sum > b.second.sum;
@@ -159,7 +173,7 @@ int main(int argc, char** argv){
     }
    
 
-    #define MATRIX_OUTPUT
+    //#define MATRIX_OUTPUT
     #ifdef MATRIX_OUTPUT
    
     ygm::container::bag<Edge> global_bag_C(world);

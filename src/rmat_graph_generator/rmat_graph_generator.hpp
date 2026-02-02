@@ -7,21 +7,6 @@
 #include <ygm/container/bag.hpp>
 #include <ygm/container/counting_set.hpp>
 
-// struct Edge{
-//     uint64_t row;
-//     uint64_t col;
-//     bool operator<(const Edge& B) const{ // does not modify the content
-//         if (row != B.row) return row < B.row; // first, sort by row
-//         return col < B.col; // if rows are equal, sort by column
-      
-//     }
-
-//     template <class Archive>
-//     void serialize( Archive & ar )
-//     {
-//         ar(row, col);
-//     }
-// };
 
 template<typename edge_data_type>
 class rmat_graph_generator{
@@ -71,7 +56,7 @@ public:
             v = gctc::detail::hash_nbits(v, scale);
 
             if(transpose){
-                rmat_edges.async_insert({v, u});
+                rmat_edges.async_insert({v, u, 1});
                 if(want_top_row){
                     top_index->async_insert(v);
                 }
@@ -80,7 +65,7 @@ public:
                 }
             }
             else{
-                rmat_edges.async_insert({u, v});
+                rmat_edges.async_insert({u, v, 1});
                 if(want_top_row){
                     top_index->async_insert(u);
                 }
