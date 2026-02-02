@@ -14,8 +14,8 @@
 #include <vector>
 
 struct map_key{
-    int x;
-    int y;
+    uint64_t x;
+    uint64_t y;
 
     bool operator==(const map_key& other) const {
         return x == other.x && y == other.y;
@@ -28,8 +28,8 @@ struct map_key{
 };
 
 struct sum_counter{
-    int sum = 0;
-    int push = 0;
+    uint64_t sum = 0;
+    uint64_t push = 0;
 
     template <class Archive>
     void serialize(Archive& ar) {
@@ -50,9 +50,9 @@ std::size_t hash_value(map_key const& key) {
 }
 
 struct Edge{
-    int row;
-    int col;
-    int value;
+    uint64_t row;
+    uint64_t col;
+    uint64_t value;
     bool operator<(const Edge& B) const{ // does not modify the content
         if (row != B.row) return row < B.row; // first, sort by row
         if (col != B.col) return col < B.col; // if rows are equal, sort by column
@@ -79,8 +79,8 @@ public:
     */
     explicit Sorted_COO(ygm::comm& c, ygm::container::array<Edge>& src,
                         size_t top_k,
-                        std::vector<std::pair<int, size_t>> top_rows, 
-                        std::vector<std::pair<int, size_t>> top_cols): m_comm(c), sorted_matrix(src), pthis(this), top_k(top_k)
+                        std::vector<std::pair<uint64_t, size_t>> top_rows, 
+                        std::vector<std::pair<uint64_t, size_t>> top_cols): m_comm(c), sorted_matrix(src), pthis(this), top_k(top_k)
                         
     {
         pthis.check(m_comm);
@@ -103,12 +103,12 @@ public:
         m_comm.cout0("row-owner map initialization time: ", map_end - map_start);
 
         double merge_start = MPI_Wtime();
-        auto populate_row_owners = [](std::pair<int, int> min_max, int rank, auto self){
+        auto populate_row_owners = [](std::pair<uint64_t, uint64_t> min_max, int rank, auto self){
             self->row_owners[rank] = min_max;
         };
 
-        int first = (*sorted_matrix.local_cbegin()).value.row;
-        int last = -1;
+        uint64_t first = (*sorted_matrix.local_cbegin()).value.row;
+        uint64_t last = -1;
         auto curr = sorted_matrix.local_cbegin();
         for(;curr != sorted_matrix.local_cend(); curr.operator++()){
             last = curr.operator*().value.row;
@@ -122,7 +122,7 @@ public:
         m_comm.cout0("merge row-owner data time: ", merge_end - merge_start);
 
         double bc_start = MPI_Wtime();
-        auto broadcast_owners = [](std::vector<std::pair<int, int>> owners, auto self){
+        auto broadcast_owners = [](std::vector<std::pair<uint64_t, uint64_t>> owners, auto self){
             self->row_owners = owners;
         };
         if(m_comm.rank0()){
@@ -142,7 +142,7 @@ public:
     
         @param source: the number of the row number 
     */
-    std::vector<int> get_owners(int source);
+    std::vector<uint64_t> get_owners(uint64_t source);
 
    
     /**
@@ -163,7 +163,7 @@ public:
         @return none
     */
     template<typename Fn, typename... VisitorArgs>
-    void async_visit_row(int target_row, Fn user_func, VisitorArgs&... args);
+    void async_visit_row(uint64_t target_row, Fn user_func, VisitorArgs&... args);
 
 
     /*
@@ -185,16 +185,16 @@ private:
     typename ygm::ygm_ptr<Sorted_COO> pthis;
     size_t top_k;
     // experiment 2: unordered flat map with pair<i, j> and partial product
-    boost::unordered_flat_map<std::pair<int, int>, int> cache;
+    boost::unordered_flat_map<std::pair<uint64_t, uint64_t>, uint64_t> cache;
     // to do: create uniform generator and rmat generator
     // make a hybrid generator, e.g. 10% rmat and 90% random (uniform)
     // make the uniform generator parallel, with each rank having unique seed.
-    boost::unordered_flat_set<int> top_rows;
-    boost::unordered_flat_set<int> top_cols;
+    boost::unordered_flat_set<uint64_t> top_rows;
+    boost::unordered_flat_set<uint64_t> top_cols;
     // experiment 1: two more sets for i and j
     // instead of checking for double i, j
     // individually check for i and j to break out early
-    std::vector<std::pair<int, int>> row_owners;
+    std::vector<std::pair<uint64_t, uint64_t>> row_owners;
 
     
 };

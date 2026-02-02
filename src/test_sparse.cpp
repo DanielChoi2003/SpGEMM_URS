@@ -1,4 +1,5 @@
 #include "sorted_coo.hpp"
+#include "rmat_graph_generator/rmat_graph_generator.hpp"
 #include <ygm/container/bag.hpp>
 #include <ygm/io/csv_parser.hpp>
 #include <stdio.h>
@@ -13,96 +14,122 @@ int main(int argc, char** argv){
     ygm::comm world(&argc, &argv);
     static ygm::comm &s_world = world;
     
-    //#define UNDIRECTED_GRAPH
-    // uncomment this if you want a AA multiplication but A is not a square matrix
-    #define TRANSPOSE 
+    #define CSV
+    //#define RMAT
 
-    std::string livejournal =  "/usr/workspace/choi26/com-lj.ungraph.csv";
-    std::string amazon = "/usr/workspace/choi26/data/real_data/undirected_single_edge/com-amazon.ungraph.csv";
-    std::string epinions = "/usr/workspace/choi26/data/real_data/directed/soc-Epinions1.csv";
+    #ifdef CSV
+        //#define UNDIRECTED_GRAPH
+        // uncomment this if you want a AA multiplication but A is not a square matrix
+        #define TRANSPOSE 
 
-    std::string amazon_output = "/usr/workspace/choi26/data/real_results/amazon_numpy_output.csv";
-    std::string epinions_output = "/g/g14/choi26/graphBLAS_sandbox/graphblas_epinions_result.csv";
+        std::string livejournal =  "/usr/workspace/choi26/com-lj.ungraph.csv";
+        std::string amazon = "/usr/workspace/choi26/data/real_data/undirected_single_edge/com-amazon.ungraph.csv";
+        std::string epinions = "/usr/workspace/choi26/data/real_data/directed/soc-Epinions1.csv";
 
-    std::string filename_A = epinions;
-    std::string filename_B = epinions;
+        std::string amazon_output = "/usr/workspace/choi26/data/real_results/amazon_numpy_output.csv";
+        std::string epinions_output = "/g/g14/choi26/graphBLAS_sandbox/graphblas_epinions_result.csv";
 
-     // Task 1: data extraction
-    auto bagap = std::make_unique<ygm::container::bag<Edge>>(world);
-    ygm::container::counting_set<int> top_rows(world);
-    std::vector<std::string> files_A= {filename_A};
-    std::fstream file_A(files_A[0]);
-    YGM_ASSERT_RELEASE(file_A.is_open() == true);
-    file_A.close();
-    ygm::io::csv_parser parser_A(world, files_A);
-    // if the data is small, only one rank will participate
-    parser_A.for_all([&](ygm::io::detail::csv_line line){ 
+        std::string filename_A = epinions;
+        std::string filename_B = epinions;
 
-        int row = line[0].as_integer();
-        int col = line[1].as_integer();
-        int value = 1;
-        if(line.size() == 3){
-           value = line[2].as_integer();
-        }
-        // what about self directed edge?
-        #ifdef UNDIRECTED_GRAPH
-            Edge rev = {col, row, value};
-            bagap->async_insert(rev);
-            top_rows.async_insert(col);
-        #endif
-        Edge ed = {row, col, value};
-        bagap->async_insert(ed);
-        top_rows.async_insert(row);
-    });
-    world.barrier();
+        // Task 1: data extraction
+        auto bagap = std::make_unique<ygm::container::bag<Edge>>(world);
+        ygm::container::counting_set<uint64_t> top_rows(world);
+        std::vector<std::string> files_A= {filename_A};
+        std::fstream file_A(files_A[0]);
+        YGM_ASSERT_RELEASE(file_A.is_open() == true);
+        file_A.close();
+        ygm::io::csv_parser parser_A(world, files_A);
+        // if the data is small, only one rank will participate
+        parser_A.for_all([&](ygm::io::detail::csv_line line){ 
 
-    ygm::container::array<Edge> unsorted_matrix(world, *bagap);
-    bagap.reset();
-
-    // matrix B data extraction
-    auto bagbp = std::make_unique<ygm::container::bag<Edge>>(world);
-    ygm::container::counting_set<int> top_cols(world);
-    std::vector<std::string> files_B= {filename_B};
-    std::fstream file_B(files_B[0]);
-    YGM_ASSERT_RELEASE(file_B.is_open() == true);
-    file_B.close();
-    ygm::io::csv_parser parser_B(world, files_B);
-    parser_B.for_all([&](ygm::io::detail::csv_line line){
-
-        int row = line[0].as_integer();
-        int col = line[1].as_integer();
-        int value = 1;
-        if(line.size() == 3){
+            uint64_t row = line[0].as_integer();
+            uint64_t col = line[1].as_integer();
+            uint64_t value = 1;
+            if(line.size() == 3){
             value = line[2].as_integer();
-        }
-        #if defined(UNDIRECTED_GRAPH) || defined(TRANSPOSE)
-            Edge rev = {col, row, value};
-            bagbp->async_insert(rev);
-            top_cols.async_insert(row);
-        #endif
-
-
-        #ifndef TRANSPOSE
+            }
+            // what about self directed edge?
+            #ifdef UNDIRECTED_GRAPH
+                Edge rev = {col, row, value};
+                bagap->async_insert(rev);
+                top_rows.async_insert(col);
+            #endif
             Edge ed = {row, col, value};
-            bagbp->async_insert(ed);
-            top_cols.async_insert(col);
-        #endif
-    });
-    world.barrier();
+            bagap->async_insert(ed);
+            top_rows.async_insert(row);
+        });
+        world.barrier();
 
-    ygm::container::array<Edge> sorted_matrix(world, *bagbp);
-    bagbp.reset();
+        ygm::container::array<Edge> unsorted_matrix(world, *bagap);
+        bagap.reset();
+
+        // matrix B data extraction
+        auto bagbp = std::make_unique<ygm::container::bag<Edge>>(world);
+        ygm::container::counting_set<uint64_t> top_cols(world);
+        std::vector<std::string> files_B= {filename_B};
+        std::fstream file_B(files_B[0]);
+        YGM_ASSERT_RELEASE(file_B.is_open() == true);
+        file_B.close();
+        ygm::io::csv_parser parser_B(world, files_B);
+        parser_B.for_all([&](ygm::io::detail::csv_line line){
+
+            uint64_t row = line[0].as_integer();
+            uint64_t col = line[1].as_integer();
+            uint64_t value = 1;
+            if(line.size() == 3){
+                value = line[2].as_integer();
+            }
+            #if defined(UNDIRECTED_GRAPH) || defined(TRANSPOSE)
+                Edge rev = {col, row, value};
+                bagbp->async_insert(rev);
+                top_cols.async_insert(row);
+            #endif
+
+
+            #ifndef TRANSPOSE
+                Edge ed = {row, col, value};
+                bagbp->async_insert(ed);
+                top_cols.async_insert(col);
+            #endif
+        });
+        world.barrier();
+
+        ygm::container::array<Edge> sorted_matrix(world, *bagbp);
+        bagbp.reset();
+
+    #endif
+
+    #ifdef RMAT
+        ygm::container::bag<Edge> unsorted_bag(world);
+        ygm::container::bag<Edge> sorted_bag(world);
+        ygm::container::counting_set<uint64_t> top_rows(world);
+        ygm::container::counting_set<uint64_t> top_cols(world);
+        auto top_row_ptr = world.make_ygm_ptr(top_rows);
+        auto top_col_ptr = world.make_ygm_ptr(top_cols);
+
+        rmat_graph_generator rmat_gen_A(world, unsorted_bag, top_row_ptr);
+        rmat_graph_generator rmat_gen_B(world, sorted_bag, top_col_ptr);
+
+        rmat_gen_A.generate_rmat_edges(25, 60000000, 0.74, 0.06, 0.1, 0.1, 0.8, true, false, false);
+        rmat_gen_B.generate_rmat_edges(25, 60000000, 0.74, 0.06, 0.1, 0.1, 0.8, false, true, true);
+
+        world.barrier();
+
+        ygm::container::array<Edge> unsorted_matrix(world, unsorted_bag);
+        ygm::container::array<Edge> sorted_matrix(world, sorted_bag);
+    #endif
 
     double setup_start = MPI_Wtime();
     size_t k = 100;
-    auto comp_count = [](const std::pair<int, size_t>& lhs, const std::pair<int, size_t>& rhs){
+    auto comp_count = [](const std::pair<uint64_t, size_t>& lhs, const std::pair<uint64_t, size_t>& rhs){
         if(lhs.second == rhs.second){
             return lhs.first < rhs.first;
         }
         return lhs.second > rhs.second;
     };
-    std::vector<std::pair<int, size_t>> ktop_cols = top_cols.gather_topk(k, comp_count);
-    std::vector<std::pair<int, size_t>> ktop_rows = top_rows.gather_topk(k, comp_count);
+    std::vector<std::pair<uint64_t, size_t>> ktop_cols = top_cols.gather_topk(k, comp_count);
+    std::vector<std::pair<uint64_t, size_t>> ktop_rows = top_rows.gather_topk(k, comp_count);
     world.barrier();
     Sorted_COO test_COO(world, sorted_matrix, k, ktop_rows, ktop_cols);
     double setup_end = MPI_Wtime();
