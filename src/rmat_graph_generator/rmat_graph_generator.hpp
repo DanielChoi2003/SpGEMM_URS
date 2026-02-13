@@ -12,10 +12,11 @@ template<typename edge_data_type>
 class rmat_graph_generator{
 public:
 
-    rmat_graph_generator(ygm::comm &c, ygm::container::bag<edge_data_type> &rmat_edges,
+    rmat_graph_generator(ygm::comm &c, ygm::container::array<edge_data_type> &rmat_edges,
                         ygm::ygm_ptr<ygm::container::counting_set<uint64_t>> top_index = nullptr) 
-                        : m_comm(c), rmat_edges(rmat_edges), top_index(top_index){
-                        }
+                        : m_comm(c), rmat_edges(rmat_edges), top_index(top_index){}
+
+    
 
     void generate_rmat_edges(uint64_t scale, uint64_t total_edges, 
                             double a, double b, double c, double d, 
@@ -51,12 +52,13 @@ public:
                 v = unif(rng);
             }
 
-            // Optional but important
-            u = gctc::detail::hash_nbits(u, scale);
-            v = gctc::detail::hash_nbits(v, scale);
+            if(scale > 16){
+                u = gctc::detail::hash_nbits(u, scale);
+                v = gctc::detail::hash_nbits(v, scale);
+            }
 
             if(transpose){
-                rmat_edges.async_insert({v, u, 1});
+                rmat_edges.async_insert(e, {v, u, 1});
                 if(want_top_row){
                     top_index->async_insert(v);
                 }
@@ -65,7 +67,7 @@ public:
                 }
             }
             else{
-                rmat_edges.async_insert({u, v, 1});
+                rmat_edges.async_insert(e, {u, v, 1});
                 if(want_top_row){
                     top_index->async_insert(u);
                 }
@@ -79,7 +81,7 @@ public:
     
 private:
     ygm::comm& m_comm;
-    ygm::container::bag<edge_data_type> &rmat_edges;
+    ygm::container::array<edge_data_type> &rmat_edges;
     ygm::ygm_ptr<ygm::container::counting_set<uint64_t>> top_index;
 
 };

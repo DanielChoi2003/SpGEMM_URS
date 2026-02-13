@@ -76,8 +76,6 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
     auto add_count_ptr = m_comm.make_ygm_ptr(add_count);
     m_comm.stats_reset();
 
-    m_comm.barrier();
-
     //#define CACHE
 
     auto multiplier = [](auto pmap, auto self, 
@@ -117,11 +115,10 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
 
             // NOTE: could potentially overflow with large values
             uint64_t product = input_value * match_edge.value; // valueB * valueA;
-
+            (*mult_count_ptr)++;
             if(product == 0){
                 continue;
             }
-            (*mult_count_ptr)++;
             auto adder = [](const auto &key, auto &sum_counter_pair, auto to_add,
                             auto add_count_ptr){
                 sum_counter_pair.sum += to_add;
@@ -130,11 +127,13 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
             };
 
             #ifdef CACHE
-                if(self->top_rows.count(input_row) && self->top_cols.count(match_edge.col)){
+            // make it into a function and run gprof to check the runtime?
+                if(self->top_rows.contains(input_row) && self->top_cols.contains(match_edge.col)){
                     auto [it, inserted] = self->cache.try_emplace({input_row, match_edge.col}, product);
                     if (!inserted) {
                         it->second += product;
                     }
+                    // URGENT: print out the size of the cache at the end
                 }
                 else{
                     pmap->async_visit({input_row, match_edge.col}, adder, product, add_count_ptr); // Boost's hasher complains if I use a struct
@@ -149,27 +148,46 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
     }; 
     
     ygm::ygm_ptr<Accumulator> pmap(&partial_accum);
-    unsorted_matrix.local_for_all([&](uint64_t index, Edge &ed){
+    // URGENT:
+    // for(auto &ed : unsorted_matrix)
+    //    for every X counter,
+    //    m_comm.async_barrier(); interal buffer may be overflowing
+    m_comm.barrier();
+    size_t counter = 0;
+    // ygm may be returning Edge by value, not by reference. hence, non-const cannot be bind to it.
+    for(auto const &ptr : unsorted_matrix){
+        Edge const &ed = ptr.value;
         uint64_t input_column = ed.col;
         uint64_t input_row = ed.row;
         uint64_t input_value = ed.value;
         async_visit_row(input_column, multiplier, 
                         pmap, pthis, input_value, input_row, input_column,
                         mult_count_ptr, add_count_ptr);
-    });
+        counter++;
+        if(counter == 10000){
+            m_comm.async_barrier();
+            counter = 0;
+        }
+    }
     m_comm.barrier();
+
+   
     #ifdef CACHE
+        double flush_start = MPI_Wtime();
         auto adder = [](const auto &key, auto &sum_counter_pair, auto to_add){
             sum_counter_pair.sum += to_add;
             sum_counter_pair.push++;
         };
+        //m_comm.cout("cache size: ", cache.size());
         for (auto& [key, value] : cache) {
             pmap->async_visit({key.first, key.second}, adder, value);
         }
         m_comm.barrier();
+        double flush_end = MPI_Wtime();
+        m_comm.cout0("Flush time: ", flush_end - flush_start);
     #endif
     m_comm.stats_print();
-    //m_comm.cout("number of multiplication: ", mult_count, ", number of addition: ", add_count);
+    m_comm.cout("number of multiplication: ", mult_count, ", number of addition: ", add_count);
 
 }
 

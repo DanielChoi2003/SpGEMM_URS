@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: MIT
 
 add_ygm_executable(test_sparse test_sparse.cpp)
-add_ygm_executable(rmat_graph_generator rmat_graph_generator/rmat_graph_generator.cpp)
-#add_ygm_executable(proc_cache_test proc_cache/proc_cache_test.cpp)
-#add_ygm_executable(shared_mem others/shared_mem.cpp)
-#add_ygm_executable(test_shm shm_counting_set/test_shm.cpp)
+#add_ygm_executable(rmat_spgemm_no_cache test_sparse.cpp)
+#add_ygm_executable(rmat_spgemm_cache test_sparse.cpp)
+#add_ygm_executable(rmat_graph_generator rmat_graph_generator/rmat_graph_generator.cpp)
+
