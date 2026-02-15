@@ -95,12 +95,8 @@ public:
         sorted_matrix.sort();
         double sort_end = MPI_Wtime();
         m_comm.cout0("ygm array sort time: ", sort_end - sort_start);
-        
-        double map_start = MPI_Wtime();
-
+    
         m_comm.barrier(); 
-        double map_end = MPI_Wtime();
-        m_comm.cout0("row-owner map initialization time: ", map_end - map_start);
 
         double merge_start = MPI_Wtime();
         auto populate_row_owners = [](std::pair<uint64_t, uint64_t> min_max, int rank, auto self){
@@ -109,9 +105,16 @@ public:
 
         uint64_t first = (*sorted_matrix.local_cbegin()).value.row;
         uint64_t last = -1;
-        auto curr = sorted_matrix.local_cbegin();
-        for(;curr != sorted_matrix.local_cend(); curr.operator++()){
-            last = curr.operator*().value.row;
+        // POPULATING THE ROW PTRS
+        // plus one to get the range of rows, additional plus one for row ptr's last index
+        row_ptrs.resize(last - first + 2);
+        auto it = sorted_matrix.local_cbegin();
+        uint64_t current_row = (*curr).value.row;
+        uint32_t current_index = 0;
+        row_ptrs.front() = current_index;
+        for(;it != sorted_matrix.local_cend(); it.operator++()){
+
+            last = it.operator*().value.row;
         }
 
         m_comm.async(0, populate_row_owners, 
@@ -131,6 +134,7 @@ public:
         m_comm.barrier();
         double bc_end = MPI_Wtime();
         m_comm.cout0("broadcast row-owner data time: ", bc_end - bc_start);
+
 
     }
 
@@ -195,8 +199,7 @@ private:
     // instead of checking for double i, j
     // individually check for i and j to break out early
     std::vector<std::pair<uint64_t, uint64_t>> row_owners;
-
-    
+    std::vector<uint64_t> row_ptrs;
 };
 
 
