@@ -155,7 +155,7 @@ int main(int argc, char** argv){
         double b = 0.19;
         double c = 0.19;
         double d = 0.05;
-        double rmat_to_uni_ratio = 1;
+        double rmat_to_uni_ratio = 0;
 
         ygm::container::array<Edge> unsorted_matrix(world, edges);
         ygm::container::array<Edge> sorted_matrix(world, edges);
