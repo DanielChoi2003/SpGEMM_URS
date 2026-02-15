@@ -70,17 +70,11 @@ inline void Sorted_COO::async_visit_row(
 
 template <class Matrix, class Accumulator>
 inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_accum){
-    int mult_count = 0;
-    auto mult_count_ptr = m_comm.make_ygm_ptr(mult_count);
-    int add_count = 0;
-    auto add_count_ptr = m_comm.make_ygm_ptr(add_count);
     m_comm.stats_reset();
 
-    //#define CACHE
 
     auto multiplier = [](auto pmap, auto self, 
-                        uint64_t input_value, uint64_t input_row, uint64_t input_column,
-                        auto mult_count_ptr, auto add_count_ptr){
+                        uint64_t input_value, uint64_t input_row, uint64_t input_column){
          // find the first Edge with matching row to input_column with std::lower_bound
         uint64_t low = self->sorted_matrix.partitioner.local_start();
         uint64_t high = low + self->sorted_matrix.partitioner.local_size();
@@ -115,34 +109,14 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
 
             // NOTE: could potentially overflow with large values
             uint64_t product = input_value * match_edge.value; // valueB * valueA;
-            (*mult_count_ptr)++;
             if(product == 0){
                 continue;
             }
-            auto adder = [](const auto &key, auto &sum_counter_pair, auto to_add,
-                            auto add_count_ptr){
-                sum_counter_pair.sum += to_add;
-                sum_counter_pair.push++;
-                (*add_count_ptr)++;
+            auto adder = [](const auto &key, auto &value, auto to_add){
+                value += to_add;
             };
-
-            #ifdef CACHE
-            // make it into a function and run gprof to check the runtime?
-                if(self->top_rows.contains(input_row) && self->top_cols.contains(match_edge.col)){
-                    auto [it, inserted] = self->cache.try_emplace({input_row, match_edge.col}, product);
-                    if (!inserted) {
-                        it->second += product;
-                    }
-                    // URGENT: print out the size of the cache at the end
-                }
-                else{
-                    pmap->async_visit({input_row, match_edge.col}, adder, product, add_count_ptr); // Boost's hasher complains if I use a struct
-                }
-            #endif
-
-            #ifndef CACHE
-                pmap->async_visit({input_row, match_edge.col}, adder, product, add_count_ptr); // Boost's hasher complains if I use a struct
-            #endif
+            pmap->async_visit({input_row, match_edge.col}, adder, product); // Boost's hasher complains if I use a struct
+          
 
         }   
     }; 
@@ -161,8 +135,7 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
         uint64_t input_row = ed.row;
         uint64_t input_value = ed.value;
         async_visit_row(input_column, multiplier, 
-                        pmap, pthis, input_value, input_row, input_column,
-                        mult_count_ptr, add_count_ptr);
+                        pmap, pthis, input_value, input_row, input_column);
         counter++;
         if(counter == 10000){
             m_comm.async_barrier();
@@ -171,24 +144,7 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
     }
     m_comm.barrier();
 
-   
-    #ifdef CACHE
-        double flush_start = MPI_Wtime();
-        auto adder = [](const auto &key, auto &sum_counter_pair, auto to_add){
-            sum_counter_pair.sum += to_add;
-            sum_counter_pair.push++;
-        };
-        //m_comm.cout("cache size: ", cache.size());
-        for (auto& [key, value] : cache) {
-            pmap->async_visit({key.first, key.second}, adder, value);
-        }
-        m_comm.barrier();
-        double flush_end = MPI_Wtime();
-        m_comm.cout0("Flush time: ", flush_end - flush_start);
-    #endif
     m_comm.stats_print();
-    m_comm.cout("number of multiplication: ", mult_count, ", number of addition: ", add_count);
-
 }
 
 

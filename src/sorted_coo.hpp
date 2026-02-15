@@ -27,16 +27,6 @@ struct map_key{
     }
 };
 
-struct sum_counter{
-    uint64_t sum = 0;
-    uint64_t push = 0;
-
-    template <class Archive>
-    void serialize(Archive& ar) {
-        ar(sum, push);
-    }
-};
-
 /*
     std::pair is not trivially copyable -> need to use struct ->
     requires custom hashing for the struct as std::pair is no longer
@@ -77,20 +67,13 @@ public:
         @param ygm::comm&: communicator object
         @param ygm::container::array<Edge>& src: array that will be sorted in the constructor.
     */
-    explicit Sorted_COO(ygm::comm& c, ygm::container::array<Edge>& src,
-                        size_t top_k,
-                        std::vector<std::pair<uint64_t, size_t>> top_rows, 
-                        std::vector<std::pair<uint64_t, size_t>> top_cols): m_comm(c), sorted_matrix(src), pthis(this), top_k(top_k)
+    explicit Sorted_COO(ygm::comm& c, ygm::container::array<Edge>& src): 
+                        m_comm(c), sorted_matrix(src), pthis(this)
                         
     {
         pthis.check(m_comm);
         row_owners.resize(m_comm.size());
 
-        for(int i = 0; i < top_k; i++){
-            this->top_rows.insert(top_rows[i].first);
-            this->top_cols.insert(top_cols[i].first);
-        }
-        cache.reserve(top_k * top_k);
         double sort_start = MPI_Wtime();
         sorted_matrix.sort();
         double sort_end = MPI_Wtime();
@@ -183,20 +166,8 @@ private:
     ygm::comm &m_comm;                            // store the communicator. Hence the &
     ygm::container::array<Edge> &sorted_matrix;
     typename ygm::ygm_ptr<Sorted_COO> pthis;
-    size_t top_k;
-    // experiment 2: unordered flat map with pair<i, j> and partial product
-    boost::unordered_flat_map<std::pair<uint64_t, uint64_t>, uint64_t> cache;
-    // to do: create uniform generator and rmat generator
-    // make a hybrid generator, e.g. 10% rmat and 90% random (uniform)
-    // make the uniform generator parallel, with each rank having unique seed.
-    boost::unordered_flat_set<uint64_t> top_rows;
-    boost::unordered_flat_set<uint64_t> top_cols;
-    // experiment 1: two more sets for i and j
-    // instead of checking for double i, j
-    // individually check for i and j to break out early
+  
     std::vector<std::pair<uint64_t, uint64_t>> row_owners;
-
-    
 };
 
 

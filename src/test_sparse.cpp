@@ -160,12 +160,8 @@ int main(int argc, char** argv){
         ygm::container::array<Edge> unsorted_matrix(world, edges);
         ygm::container::array<Edge> sorted_matrix(world, edges);
 
-        auto top_row_ptr = std::make_unique<ygm::container::counting_set<uint64_t>>(world);
-        auto top_col_ptr = std::make_unique<ygm::container::counting_set<uint64_t>>(world);
-        auto top_row_ygm_ptr = world.make_ygm_ptr(*top_row_ptr);
-        auto top_col_ygm_ptr = world.make_ygm_ptr(*top_col_ptr);
-        rmat_graph_generator rmat_gen_A(world, unsorted_matrix, top_row_ygm_ptr);
-        rmat_gen_A.generate_rmat_edges(scale, edges, a, b, c, d, rmat_to_uni_ratio, true, false, false);
+        rmat_graph_generator rmat_gen_A(world, unsorted_matrix);
+        rmat_gen_A.generate_rmat_edges(scale, edges, a, b, c, d, rmat_to_uni_ratio, false, false, false);
 
         #ifdef MAKE_COPY
             std::stringstream filename;
@@ -195,69 +191,23 @@ int main(int argc, char** argv){
             return 0;
         #endif
     
-        rmat_graph_generator rmat_gen_B(world, sorted_matrix, top_col_ygm_ptr);
-        rmat_gen_B.generate_rmat_edges(scale, edges, a, b, c, d, rmat_to_uni_ratio, false, true, true);
+        rmat_graph_generator rmat_gen_B(world, sorted_matrix);
+        rmat_gen_B.generate_rmat_edges(scale, edges, a, b, c, d, rmat_to_uni_ratio, false, false, true);
 
         world.barrier();
         // NOTE: YGM::BAG'S CLEAR() DOES NOT DEALLOCATE THE MEMORY/CAPACITY
     #endif
+    
+    double setup = MPI_Wtime();
+    Sorted_COO test_COO(world, sorted_matrix);
+    
+    setup = MPI_Wtime() - setup;
+    world.cout0("setup time: ", setup);
 
-    double setup_start = MPI_Wtime();
-    size_t k = 1000;
-    auto comp_count = [](const std::pair<uint64_t, size_t>& lhs, const std::pair<uint64_t, size_t>& rhs){
-        if(lhs.second == rhs.second){
-            return lhs.first < rhs.first;
-        }
-        return lhs.second > rhs.second;
-    };
-    std::vector<std::pair<uint64_t, size_t>> ktop_cols = (*top_col_ptr).gather_topk(k, comp_count);
-    std::vector<std::pair<uint64_t, size_t>> ktop_rows = (*top_row_ptr).gather_topk(k, comp_count);
-    top_row_ptr.reset();
-    top_col_ptr.reset();
-
-    #define FILTER
-    #ifdef FILTER
-        // FILTERING TOP ROWS AND COLUMNS
-        std::unordered_set<uint64_t> top;
-        for(auto &p : ktop_rows){
-            top.insert(p.first);
-        }
-        world.cout0("before size: ", unsorted_matrix.size());
-        auto bagap = std::make_unique<ygm::container::bag<Edge>>(world);
-        auto bagbp = std::make_unique<ygm::container::bag<Edge>>(world);
-        unsorted_matrix.for_all([&](int index, Edge &ed){
-            if(!top.contains(ed.row)){
-                bagap->async_insert(ed);
-            }
-        });
-        sorted_matrix.for_all([&](int index, Edge &ed){
-            if(!top.contains(ed.col)){
-                bagbp->async_insert(ed);
-            }
-        });
-        world.barrier();
-        world.cout0("filtered size: ", bagap->size());
-        ygm::container::array<Edge> filtered_unsorted_matrix(world, *bagap);
-        bagap.reset();
-        ygm::container::array<Edge> filtered_sorted_matrix(world, *bagbp);
-        bagbp.reset();
-    #endif
-
-    #if defined(FILTER)
-        Sorted_COO test_COO(world, filtered_sorted_matrix, k, ktop_rows, ktop_cols);
-    #else
-        Sorted_COO test_COO(world, sorted_matrix, k, ktop_rows, ktop_cols);
-    #endif
-    double setup_end = MPI_Wtime();
-    world.cout0("setup time: ", setup_end - setup_start);
-
-    ygm::container::map<map_key, sum_counter> matrix_C(world); 
+    ygm::container::map<map_key, uint64_t> matrix_C(world); 
     double spgemm_start = MPI_Wtime();
-    #if defined(FILTER)
-        test_COO.spGemm(filtered_unsorted_matrix, matrix_C);
-    #else
-        test_COO.spGemm(unsorted_matrix, matrix_C);
-    #endif
+    test_COO.spGemm(unsorted_matrix, matrix_C);
+   
     world.barrier();
     double spgemm_end = MPI_Wtime();    
     world.cout0("Total number of cores: ", world.size());
