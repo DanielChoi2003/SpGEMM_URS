@@ -1,5 +1,4 @@
 #pragma once
-#include "proc_cache/proc_cache.hpp"
 #include <ygm/comm.hpp>
 #include <ygm/container/map.hpp>
 #include <ygm/container/array.hpp>
@@ -15,8 +14,8 @@
 #include <vector>
 
 struct map_key{
-    int x;
-    int y;
+    uint64_t x;
+    uint64_t y;
 
     bool operator==(const map_key& other) const {
         return x == other.x && y == other.y;
@@ -41,9 +40,9 @@ std::size_t hash_value(map_key const& key) {
 }
 
 struct Edge{
-    int row;
-    int col;
-    int value;
+    uint64_t row;
+    uint64_t col;
+    uint64_t value;
     bool operator<(const Edge& B) const{ // does not modify the content
         if (row != B.row) return row < B.row; // first, sort by row
         if (col != B.col) return col < B.col; // if rows are equal, sort by column
@@ -68,20 +67,13 @@ public:
         @param ygm::comm&: communicator object
         @param ygm::container::array<Edge>& src: array that will be sorted in the constructor.
     */
-    explicit Sorted_COO(ygm::comm& c, ygm::container::array<Edge>& src,
-                        size_t top_k,
-                        std::vector<std::pair<int, size_t>> top_rows, 
-                        std::vector<std::pair<int, size_t>> top_cols): m_comm(c), sorted_matrix(src), pthis(this), top_k(top_k)
+    explicit Sorted_COO(ygm::comm& c, ygm::container::array<Edge>& src): 
+                        m_comm(c), sorted_matrix(src), pthis(this)
                         
     {
         pthis.check(m_comm);
         row_owners.resize(m_comm.size());
 
-        for(int i = 0; i < top_k; i++){
-            for(int j = 0; j < top_k; j++){
-                top_pairs.insert({top_rows[i].first, top_cols[j].first});
-            }
-        }
         double sort_start = MPI_Wtime();
         sorted_matrix.sort();
         double sort_end = MPI_Wtime();
@@ -94,12 +86,12 @@ public:
         m_comm.cout0("row-owner map initialization time: ", map_end - map_start);
 
         double merge_start = MPI_Wtime();
-        auto populate_row_owners = [](std::pair<int, int> min_max, int rank, auto self){
+        auto populate_row_owners = [](std::pair<uint64_t, uint64_t> min_max, int rank, auto self){
             self->row_owners[rank] = min_max;
         };
 
-        int first = sorted_matrix.local_cbegin().operator*().value.row;
-        int last = -1;
+        uint64_t first = (*sorted_matrix.local_cbegin()).value.row;
+        uint64_t last = -1;
         auto curr = sorted_matrix.local_cbegin();
         for(;curr != sorted_matrix.local_cend(); curr.operator++()){
             last = curr.operator*().value.row;
@@ -113,7 +105,7 @@ public:
         m_comm.cout0("merge row-owner data time: ", merge_end - merge_start);
 
         double bc_start = MPI_Wtime();
-        auto broadcast_owners = [](std::vector<std::pair<int, int>> owners, auto self){
+        auto broadcast_owners = [](std::vector<std::pair<uint64_t, uint64_t>> owners, auto self){
             self->row_owners = owners;
         };
         if(m_comm.rank0()){
@@ -133,7 +125,7 @@ public:
     
         @param source: the number of the row number 
     */
-    std::vector<int> get_owners(int source);
+    std::vector<uint64_t> get_owners(uint64_t source);
 
    
     /**
@@ -154,7 +146,7 @@ public:
         @return none
     */
     template<typename Fn, typename... VisitorArgs>
-    void async_visit_row(int target_row, Fn user_func, VisitorArgs&... args);
+    void async_visit_row(uint64_t target_row, Fn user_func, VisitorArgs&... args);
 
 
     /*
@@ -174,10 +166,10 @@ private:
     ygm::comm &m_comm;                            // store the communicator. Hence the &
     ygm::container::array<Edge> &sorted_matrix;
     typename ygm::ygm_ptr<Sorted_COO> pthis;
-    size_t top_k;
-    boost::unordered_flat_set<std::pair<int, int>> top_pairs;
-
-    std::vector<std::pair<int, int>> row_owners;
+  
+    std::vector<std::pair<uint64_t, uint64_t>> row_owners;
+    std::vector<uint64_t> row_ptrs;
+    uint64_t offset;
 };
 
 
