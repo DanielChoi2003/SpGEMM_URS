@@ -92,10 +92,27 @@ public:
 
         uint64_t first = (*sorted_matrix.local_cbegin()).value.row;
         uint64_t last = -1;
-        auto curr = sorted_matrix.local_cbegin();
-        for(;curr != sorted_matrix.local_cend(); curr.operator++()){
-            last = curr.operator*().value.row;
+        auto it = sorted_matrix.local_cbegin();
+        for(;it != sorted_matrix.local_cend(); it.operator++()){
+            last = it.operator*().value.row;
         }
+
+        // POPULATING THE ROW PTRS
+        // plus one to get the range of rows, additional plus one for row ptr's last index
+        row_ptrs.resize(last - first + 2);
+        offset = first;
+        auto curr = sorted_matrix.local_cbegin();
+        uint32_t row_index = 0;
+        uint32_t ptr_index = 0; // index of the row ptrs 
+        row_ptrs[ptr_index] = row_index;
+        for(;curr != sorted_matrix.local_cend(); ++curr){
+            while((offset + ptr_index) != (*curr).value.row){
+                ptr_index++;
+                row_ptrs[ptr_index] = row_index;
+            }
+            row_index++;
+        }
+        row_ptrs.back() = row_index; // last index + 1
 
         m_comm.async(0, populate_row_owners, 
                     std::make_pair(first, last), 
