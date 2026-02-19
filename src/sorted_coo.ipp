@@ -81,37 +81,18 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
     auto multiplier = [](auto pmap, auto self, 
                         uint64_t input_value, uint64_t input_row, uint64_t input_column,
                         auto mult_count_ptr, auto add_count_ptr){
-         // find the first Edge with matching row to input_column with std::lower_bound
-        uint64_t low = self->sorted_matrix.partitioner.local_start();
-        uint64_t high = low + self->sorted_matrix.partitioner.local_size();
-        uint64_t upper_bound = high;
 
-        while (low < high) {
-            uint64_t mid = low + (high - low) / 2;
-
-            Edge mid_edge = {};
-            // local visit expects a global index. internally, converts it into a local index: 0 to local size
-            self->sorted_matrix.local_visit(mid, [&mid_edge](uint64_t index, Edge &edge){
-                mid_edge = edge;
-            });
-
-            if (mid_edge.row < input_column) { // the edge with matching row has to be to the right of mid
-                low = mid + 1;
-            }
-            else { // the first edge with matching row has to be to the left of mid
-                high = mid;
-            }
-        }
-
-        // keep multiplying with the next Edge until the row number no longer matches
-        for(uint64_t i = low; i < upper_bound; i++){
+        // CHANGE THIS FROM BINARY SEARCH TO CSR SEARCH
+        uint32_t loc = input_column - self->offset;
+        uint32_t global_offset = self->sorted_matrix.partitioner.local_start();
+        uint32_t start = global_offset + self->row_ptrs[loc];
+        uint32_t end = global_offset + self->row_ptrs[loc + 1]; // EXCLUSIVE
+        for(; start < end; start++){
             Edge match_edge = {};  
-            self->sorted_matrix.local_visit(i, [&match_edge](uint64_t index, Edge &edge){
+            // local visit EXPECTS A GLOBAL INDEX. internally, converts it into a local index: 0 to local size
+            self->sorted_matrix.local_visit(start, [&match_edge](uint64_t index, Edge &edge){
                 match_edge = edge;
             });
-            if(match_edge.row != input_column){
-                break;
-            }
 
             // NOTE: could potentially overflow with large values
             uint64_t product = input_value * match_edge.value; // valueB * valueA;
@@ -144,7 +125,9 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
                 pmap->async_visit({input_row, match_edge.col}, adder, product, add_count_ptr); // Boost's hasher complains if I use a struct
             #endif
 
-        }   
+        } 
+
+         
     }; 
     
     ygm::ygm_ptr<Accumulator> pmap(&partial_accum);

@@ -105,22 +105,42 @@ public:
 
         uint64_t first = (*sorted_matrix.local_cbegin()).value.row;
         uint64_t last = -1;
-        // POPULATING THE ROW PTRS
-        // plus one to get the range of rows, additional plus one for row ptr's last index
-        row_ptrs.resize(last - first + 2);
         auto it = sorted_matrix.local_cbegin();
-        uint64_t current_row = (*curr).value.row;
-        uint32_t current_index = 0;
-        row_ptrs.front() = current_index;
         for(;it != sorted_matrix.local_cend(); it.operator++()){
-
             last = it.operator*().value.row;
         }
+
+         // POPULATING THE ROW PTRS
+        // plus one to get the range of rows, additional plus one for row ptr's last index
+        row_ptrs.resize(last - first + 2);
+        offset = first;
+        auto curr = sorted_matrix.local_cbegin();
+        uint32_t row_index = 0;
+        uint32_t ptr_index = 0; // index of the row ptrs 
+        row_ptrs[ptr_index] = row_index;
+        for(;curr != sorted_matrix.local_cend(); ++curr){
+            while((offset + ptr_index) != (*curr).value.row){
+                ptr_index++;
+                row_ptrs[ptr_index] = row_index;
+
+            }
+           
+            row_index++;
+            
+            // printf("%d ", (*curr).value.row);   
+        }
+        row_ptrs.back() = row_index; // last index + 1
+   
+
+        // for(int i = 0; i < row_ptrs.size(); i++){
+        //     printf("%d ", row_ptrs[i]);
+        // }
+        // printf("\n");
 
         m_comm.async(0, populate_row_owners, 
                     std::make_pair(first, last), 
                     m_comm.rank(), pthis);
-        m_comm.barrier();
+        m_comm.barrier(); 
         double merge_end = MPI_Wtime();
         m_comm.cout0("merge row-owner data time: ", merge_end - merge_start);
 
@@ -200,6 +220,7 @@ private:
     // individually check for i and j to break out early
     std::vector<std::pair<uint64_t, uint64_t>> row_owners;
     std::vector<uint64_t> row_ptrs;
+    uint64_t offset;
 };
 
 
