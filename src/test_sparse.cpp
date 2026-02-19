@@ -198,11 +198,7 @@ int main(int argc, char** argv){
         // NOTE: YGM::BAG'S CLEAR() DOES NOT DEALLOCATE THE MEMORY/CAPACITY
     #endif
     
-    double setup = MPI_Wtime();
     Sorted_COO test_COO(world, sorted_matrix);
-    
-    setup = MPI_Wtime() - setup;
-    world.cout0("setup time: ", setup);
 
     ygm::container::map<map_key, uint64_t> matrix_C(world); 
     double spgemm_start = MPI_Wtime();
