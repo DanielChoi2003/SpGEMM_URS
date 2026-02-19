@@ -168,6 +168,8 @@ private:
     typename ygm::ygm_ptr<Sorted_COO> pthis;
   
     std::vector<std::pair<uint64_t, uint64_t>> row_owners;
+    std::vector<uint64_t> row_ptrs;
+    uint64_t offset;
 };
 
 
