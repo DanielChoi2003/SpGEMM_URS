@@ -102,8 +102,8 @@ public:
         row_ptrs.resize(last - first + 2);
         offset = first;
         auto curr = sorted_matrix.local_cbegin();
-        uint32_t row_index = 0;
-        uint32_t ptr_index = 0; // index of the row ptrs 
+        uint64_t row_index = 0;
+        uint64_t ptr_index = 0; // index of the row ptrs 
         row_ptrs[ptr_index] = row_index;
         for(;curr != sorted_matrix.local_cend(); ++curr){
             while((offset + ptr_index) != (*curr).value.row){
@@ -184,6 +184,7 @@ private:
     ygm::container::array<Edge> &sorted_matrix;
     typename ygm::ygm_ptr<Sorted_COO> pthis;
   
+    double owner_search_time = 0;
     std::vector<std::pair<uint64_t, uint64_t>> row_owners;
     std::vector<uint64_t> row_ptrs;
     uint64_t offset;

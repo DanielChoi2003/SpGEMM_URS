@@ -3,7 +3,9 @@
 #include <ygm/container/bag.hpp>
 #include <ygm/io/csv_parser.hpp>
 #include <stdio.h>
+#include <unistd.h>
 #include <cstdlib>
+#include <ctime>
 #include <string>
 #include <filesystem>
 #include <boost/container_hash/hash.hpp>
@@ -35,19 +37,106 @@
     prepopulating the cache: moves the rehashing to the preprocessing part, preventing it from rehashing during multiplication
 */
 
-int main(int argc, char** argv){
+struct Config{
+    bool enableRMAT = false;
+    int scale = -1;
 
-    ygm::comm world(&argc, &argv);
-    static ygm::comm &s_world = world;
+    bool enableCSV = false;
+    std::string CSVInput1 = "";
+    std::string CSVInput2 = "";
+
+    bool enableUndirected = false;
+
+    bool enableTranspose = false;
+
+    bool enableCopy = false;
+
+    bool enableOutput = false;
+    std::string outputFile = "";
+
+    bool enableCSVCompare = false; 
+    std::string outputCompare = "";
+};
+
+bool checkNumber(std::string s){
+    for(int i = 0; i < s.size(); i++){
+        if(!isdigit(s[i])){
+            return false;
+        }
+    }
+    return true;
+}
+
+void printUsage(const char* programName) {
+    std::cout << "Usage: " << programName << " [options]\n\n"
+              << "Options:\n"
+              << "  -r, --rmat <value>       Set the scale value\n"
+              << "  --csv <file1> <file2>    Enable CSV input\n"
+              << "  -c, --copy               Enable RMAT input copy\n"
+              << "  --compare <file>         Compare output with a given file\n"
+              << "  -o, --output <file>      Set output file\n"
+              << "  -t, --transpose          Enable edge transpose\n"
+              << "  -u, --undirected         Enable undirected edges\n"
+              << "  -h, --help               Show this help message\n\n"
+              << "Example:\n"
+              << "  " << programName << " -r 18\n";
+}
+
+Config parseArgs(int argc, char* argv[], ygm::comm &world) {
+    Config config;
+
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+
+        if (arg == "-h" || arg == "--help") {
+            if(world.rank0()){
+                printUsage(argv[0]);
+            }
+            exit(0); 
+        } else if ((arg == "-r" || arg == "--rmat") && i + 1 < argc) {
+            config.enableRMAT = true;
+            config.enableCSV = false;
+            std::string num = argv[++i];
+            if(!checkNumber(num)){
+                if(world.rank0()){
+                    std::cerr << "Error: Non-integer argument provided." << std::endl;
+                    std::cerr << "Usage: " << argv[0] << " <scale value>" << std::endl;
+                }
+                exit(1);
+            }
+            config.scale = std::stoi(num);
+        } else if (arg == "--csv" && i + 2 < argc) {
+            config.enableCSV = true;
+            config.enableRMAT = false;
+            config.CSVInput1 = argv[++i];
+            config.CSVInput2 = argv[++i];
+        } else if (arg == "-t" || arg == "--transpose") {
+            config.enableTranspose = true;
+        } else if (arg == "-u" || arg == "--undirected") {
+            config.enableUndirected = true;
+        } else if ((arg == "-c" || arg == "--copy") && i + 1 <= argc) {
+            config.enableCopy = argv[++i];
+        } else if ((arg == "-o" || arg == "--output") && i + 1 <= argc) {
+            config.enableOutput = true;
+            config.outputFile = argv[++i];
+        } else if (arg == "--compare" && i + 1 < argc) {
+            config.enableCSVCompare = true;
+            config.outputCompare = argv[++i];
+        }else {
+            if(world.rank0()){
+                std::cout << "Unknown argument: " << arg << "\n";
+                std::cout << "Run with -h for help.\n";
+            }
+            exit(1);
+        }
+    }
+
+    return config;
+}
+
+/*
+    some example inputs and outputs:
     
-    #define CSV
-    //#define RMAT
-
-    #ifdef CSV
-        //#define UNDIRECTED_GRAPH
-        // uncomment this if you want a AA multiplication but A is not a square matrix
-        #define TRANSPOSE 
-
         std::string livejournal =  "/usr/workspace/choi26/com-lj.ungraph.csv";
         std::string amazon = "/usr/workspace/choi26/data/real_data/undirected_single_edge/com-amazon.ungraph.csv";
         std::string epinions = "/usr/workspace/choi26/data/real_data/directed/soc-Epinions1.csv";
@@ -55,11 +144,23 @@ int main(int argc, char** argv){
 
         std::string amazon_output = "/usr/workspace/choi26/data/real_results/amazon_numpy_output.csv";
         std::string epinions_output = "/g/g14/choi26/graphBLAS_sandbox/graphblas_epinions_result.csv";
+*/
 
-        std::string filename_A = epinions;
-        std::string filename_B = epinions;
+int main(int argc, char** argv){
 
-        // Task 1: data extraction
+    ygm::comm world(&argc, &argv);
+    static ygm::comm &s_world = world;
+    Config config = parseArgs(argc, argv, world);
+    
+    world.welcome();
+
+    std::unique_ptr<ygm::container::array<Edge>> sorted_matrix;
+    std::unique_ptr<ygm::container::array<Edge>> unsorted_matrix;
+    if(config.enableCSV){
+
+        std::string filename_A = config.CSVInput1;
+        std::string filename_B = config.CSVInput2;
+
         auto bagap = std::make_unique<ygm::container::bag<Edge>>(world);
         auto top_row_ptr = std::make_unique<ygm::container::counting_set<uint64_t>>(world);
         std::vector<std::string> files_A= {filename_A};
@@ -77,18 +178,18 @@ int main(int argc, char** argv){
             value = line[2].as_integer();
             }
             // what about self directed edge?
-            #ifdef UNDIRECTED_GRAPH
+            if(config.enableUndirected){
                 Edge rev = {col, row, value};
                 bagap->async_insert(rev);
                 top_row_ptr->async_insert(col);
-            #endif
+            }
             Edge ed = {row, col, value};
             bagap->async_insert(ed);
             top_row_ptr->async_insert(row);
         });
         world.barrier();
 
-        ygm::container::array<Edge> unsorted_matrix(world, *bagap);
+        unsorted_matrix = std::make_unique<ygm::container::array<Edge>>(world, *bagap);
         bagap.reset();
 
         // matrix B data extraction
@@ -107,76 +208,59 @@ int main(int argc, char** argv){
             if(line.size() == 3){
                 value = line[2].as_integer();
             }
-            #if defined(UNDIRECTED_GRAPH) || defined(TRANSPOSE)
+            if(config.enableTranspose || config.enableUndirected){
                 Edge rev = {col, row, value};
                 bagbp->async_insert(rev);
                 top_col_ptr->async_insert(row);
-            #endif
-
-
-            #ifndef TRANSPOSE
+            } else{
                 Edge ed = {row, col, value};
                 bagbp->async_insert(ed);
                 top_col_ptr->async_insert(col);
-            #endif
+            }
         });
         world.barrier();
 
+        sorted_matrix = std::make_unique<ygm::container::array<Edge>>(world, *bagbp);
         ygm::container::array<Edge> sorted_matrix(world, *bagbp);
         bagbp.reset();
+    } 
+    else if(config.enableRMAT){
 
-    #endif
-
-    #ifdef RMAT
-
-        //#define MAKE_COPY
-        std::string rmat_17_output = "/usr/workspace/choi26/scale_17_result.csv";
-
-        if(argc != 2){
-            if(world.rank0()){
-                std::cerr << "Error: Not enough arguments provided." << std::endl;
-                std::cerr << "Usage: " << argv[0] << " <scale value>" << std::endl;
-            }
-            return 1;
-        }
-        
-        int scale = std::atoi(argv[1]);
-        if(scale <= 16){
+        if(config.scale <= 16){
             if(world.rank0()){
                 std::cerr << "RMAT Hashing function does not accept scale value below or equal to 16." << std::endl;
             }
             return 1;
         }
 
-        world.cout0("scale: ", scale);
+        world.cout0("scale: ", config.scale);
         int edge_factor = 16;
-        int edges = pow(2, scale) * edge_factor;
+        int edges = pow(2, config.scale) * edge_factor;
         double a = 0.57;
         double b = 0.19;
         double c = 0.19;
         double d = 0.05;
-        double rmat_to_uni_ratio = 0;
+        double rmat_to_uni_ratio = 1;
 
-        ygm::container::array<Edge> unsorted_matrix(world, edges);
-        ygm::container::array<Edge> sorted_matrix(world, edges);
+        unsorted_matrix = std::make_unique<ygm::container::array<Edge>>(world, edges);
+        sorted_matrix = std::make_unique<ygm::container::array<Edge>>(world, edges);
 
-        rmat_graph_generator rmat_gen_A(world, unsorted_matrix);
-        rmat_gen_A.generate_rmat_edges(scale, edges, a, b, c, d, rmat_to_uni_ratio, false, false, false);
+        rmat_graph_generator rmat_gen_A(world, *unsorted_matrix);
+        rmat_gen_A.generate_rmat_edges(config.scale, edges, a, b, c, d, rmat_to_uni_ratio, false, false, false);
 
-        #ifdef MAKE_COPY
+        if(config.enableCopy){
             std::stringstream filename;
             filename << "/usr/workspace/choi26/output_rank_" << world.rank() << ".csv";
             std::ofstream out(filename.str());
 
-            // for_all calls barrier, whereas local_for_all does not
-            unsorted_matrix.for_all([&](const auto& index, const auto& edge) {
+            (*unsorted_matrix).for_all([&](const auto& index, const auto& edge) {
                 out << edge.row << "," << edge.col << "\n";
             });
             out.close();
             world.barrier();
             if (world.rank() == 0) {
                 std::stringstream merged_filename;
-                merged_filename << "/usr/workspace/choi26/uni_scale_" << std::to_string(scale) << ".csv";
+                merged_filename << "/usr/workspace/choi26/rmat_scale_" << std::to_string(config.scale) << ".csv";
                 std::ofstream merged(merged_filename.str());
                 
                 for (int r = 0; r < world.size(); ++r) {
@@ -189,27 +273,27 @@ int main(int argc, char** argv){
                 }
             }
             return 0;
-        #endif
+        }
     
-        rmat_graph_generator rmat_gen_B(world, sorted_matrix);
-        rmat_gen_B.generate_rmat_edges(scale, edges, a, b, c, d, rmat_to_uni_ratio, false, false, true);
+        rmat_graph_generator rmat_gen_B(world, *sorted_matrix);
+        rmat_gen_B.generate_rmat_edges(config.scale, edges, a, b, c, d, rmat_to_uni_ratio, false, false, true);
 
         world.barrier();
         // NOTE: YGM::BAG'S CLEAR() DOES NOT DEALLOCATE THE MEMORY/CAPACITY
-    #endif
+    }
     
-    Sorted_COO test_COO(world, sorted_matrix);
+    
+    Sorted_COO test_COO(world, *sorted_matrix);
 
     ygm::container::map<map_key, uint64_t> matrix_C(world); 
     double spgemm_start = MPI_Wtime();
-    test_COO.spGemm(unsorted_matrix, matrix_C);
-   
+    test_COO.spGemm(*unsorted_matrix, matrix_C);
     world.barrier();
     double spgemm_end = MPI_Wtime();    
     world.cout0("Total number of cores: ", world.size());
     world.cout0("matrix multiplication time: ", spgemm_end - spgemm_start);
 
-    world.cout0(matrix_C.size());
+    world.cout0("matrix C size: ", matrix_C.size());
     // MEASURE PUSHES INTO MATRIX C
     // auto counter_comp = [](auto const &a, auto const &b){
     //     if(a.second.push == b.second.push){
@@ -227,57 +311,82 @@ int main(int argc, char** argv){
     // }
    
 
-    #define MATRIX_OUTPUT
-    #ifdef MATRIX_OUTPUT
-   
-    ygm::container::bag<Edge> global_bag_C(world);
-    matrix_C.for_all([&global_bag_C](map_key coord, auto value){
-        global_bag_C.async_insert({coord.x, coord.y, value});
-    });
-    world.barrier();
+    if(config.enableOutput){
+        ygm::container::bag<Edge> global_bag_C(world);
+        matrix_C.for_all([&global_bag_C](map_key coord, auto value){
+            global_bag_C.async_insert({coord.x, coord.y, value});
+        });
+        world.barrier();
 
-    std::vector<Edge> sorted_output_C;
-    global_bag_C.gather(sorted_output_C, 0);
-    if(world.rank0()){
-        std::ofstream output_file;
-        output_file.open("./output.csv");
-        std::sort(sorted_output_C.begin(), sorted_output_C.end());
-        for(Edge &ed : sorted_output_C){
-            output_file << ed.row << "," << ed.col << "," << ed.value << "\n";
-            //printf("%d,%d,%d\n", ed.row, ed.col, ed.value);
+        std::vector<Edge> sorted_output_C;
+        global_bag_C.gather(sorted_output_C, 0);
+        if(world.rank0()){
+            std::ofstream output_file;
+            output_file.open(config.outputFile);
+            std::sort(sorted_output_C.begin(), sorted_output_C.end());
+            for(Edge &ed : sorted_output_C){
+                output_file << ed.row << "," << ed.col << "," << ed.value << "\n";
+            }
+            output_file.close();    
         }
-        output_file.close();
-
-        #define CSV_COMPARE
-        #ifdef CSV_COMPARE
-        std::string output = "./output.csv";
-        std::string expected_output = epinions_output;
-
-        //"../strong_scaling_output/epinions_results/second_epinions_strong_scaling_${i}_nodes.txt"
-        // ignore all: > /dev/null 2>&1
-
-        int nodes = world.size() / 32;
-        std::string cmd = "diff -y --suppress-common-lines "
-                        + output + " " + expected_output + 
-                        " > ../strong_scaling_output/epinions_results/" +
-                        std::to_string(nodes) + "_nodes_difference.txt";
-
-        int result = system(cmd.c_str());
-
-        std::filesystem::remove("./output.csv");
-        if (result == 0) {
-            std::cout << "Files match!\n";
-            std::filesystem::remove(
-                        "../strong_scaling_output/epinions_results/" +
-                        std::to_string(nodes) + 
-                        "_nodes_difference.txt"
-                    );
-        } else {
-            std::cout << "Files differ!\n";
-        }
-        #endif
     }
-    #endif
+    
+    if(config.enableCSVCompare){
+        /*
+         * If output file has already been created, use it.
+         * else, create a temporary output file
+        */
+        std::string output = "output.csv";
+        std::string expected_output = config.outputCompare;
+
+        if(config.enableOutput){
+            output = config.outputFile;
+        }
+        else{
+            ygm::container::bag<Edge> global_bag_C(world);
+            matrix_C.for_all([&global_bag_C](map_key coord, auto value){
+                global_bag_C.async_insert({coord.x, coord.y, value});
+            });
+            world.barrier();
+
+            std::vector<Edge> sorted_output_C;
+            global_bag_C.gather(sorted_output_C, 0);
+            if(world.rank0()){
+                std::ofstream output_file;
+                output_file.open(output);
+                std::sort(sorted_output_C.begin(), sorted_output_C.end());
+                for(Edge &ed : sorted_output_C){
+                    output_file << ed.row << "," << ed.col << "," << ed.value << "\n";
+                }
+                output_file.close();
+            }
+        }
+
+        if(world.rank0()){
+            // ignore all: > /dev/null 2>&1
+            pid_t pid = getpid();
+            time_t now = time(0);
+            std::string unique_id = std::to_string(pid) + std::to_string(now);
+            std::string cmd = "diff -y --suppress-common-lines "
+                            + output + " " + expected_output + 
+                            " > " + unique_id + "_nodes_difference.txt";
+            int result = system(cmd.c_str());
+
+            std::filesystem::remove("./output.csv");
+            if (result == 0) {
+                std::cout << "Files match!\n";
+                std::filesystem::remove(
+                            "../strong_scaling_output/epinions_results/" +
+                            unique_id + 
+                            "_nodes_difference.txt"
+                        );
+            } else {
+                std::cout << "Files differ!\n";
+            }
+        }
+    }
+   
+    
 
     return 0;
 }

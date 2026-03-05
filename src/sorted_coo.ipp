@@ -19,6 +19,7 @@ using std::vector;
 
 inline vector<uint64_t> Sorted_COO::get_owners(uint64_t source){
 
+    double st = MPI_Wtime();
     vector<uint64_t> owners;
     auto comp_second = [](const std::pair<uint64_t, uint64_t>& lhs, uint64_t val) {
         return lhs.second < val;
@@ -40,7 +41,8 @@ inline vector<uint64_t> Sorted_COO::get_owners(uint64_t source){
             }
         }
     }
-
+    st = MPI_Wtime() - st;
+    owner_search_time += st;
     return owners;
 }
 
@@ -94,6 +96,7 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
             auto adder = [](const auto &key, auto &value, auto to_add){
                 value += to_add;
             };
+            // is there a way to locally store and then merge it later? to reduce the number of async messages
             pmap->async_visit({input_row, match_edge.col}, adder, product); // Boost's hasher complains if I use a struct
         } 
     }; 
@@ -102,7 +105,7 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
     // URGENT:
     // for(auto &ed : unsorted_matrix)
     //    for every X counter,
-    //    m_comm.async_barrier(); interal buffer may be overflowing
+    //    m_comm.async_barrier(); interal buffer may be overflowing due to flooding
     m_comm.barrier();
     size_t counter = 0;
     // ygm may be returning Edge by value, not by reference. hence, non-const cannot be bind to it.
@@ -114,14 +117,15 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
         async_visit_row(input_column, multiplier, 
                         pmap, pthis, input_value, input_row, input_column);
         counter++;
-        if(counter == 10000){
+        if(counter == 100000){
             m_comm.async_barrier();
             counter = 0;
         }
     }
-    m_comm.barrier();
+    m_comm.barrier(); 
 
     m_comm.stats_print();
+    //printf("Total owner search time: %f\n", owner_search_time);
 }
 
 
