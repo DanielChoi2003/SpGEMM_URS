@@ -156,6 +156,9 @@ int main(int argc, char** argv){
 
     std::unique_ptr<ygm::container::array<Edge>> sorted_matrix;
     std::unique_ptr<ygm::container::array<Edge>> unsorted_matrix;
+    auto A_column_degree = std::make_unique<ygm::container::counting_set<uint64_t>>(world);
+    auto B_row_degree = std::make_unique<ygm::container::counting_set<uint64_t>>(world);
+    double A_deg_avg, B_deg_avg; 
     if(config.enableCSV){
 
         std::string filename_A = config.CSVInput1;
@@ -163,7 +166,7 @@ int main(int argc, char** argv){
 
         auto bagap = std::make_unique<ygm::container::bag<Edge>>(world);
         auto top_row_ptr = std::make_unique<ygm::container::counting_set<uint64_t>>(world);
-        std::vector<std::string> files_A= {filename_A};
+        std::vector<std::string> files_A = {filename_A};
         std::fstream file_A(files_A[0]);
         YGM_ASSERT_RELEASE(file_A.is_open() == true);
         file_A.close();
@@ -181,11 +184,12 @@ int main(int argc, char** argv){
             if(config.enableUndirected){
                 Edge rev = {col, row, value};
                 bagap->async_insert(rev);
-                top_row_ptr->async_insert(col);
+                A_column_degree->async_insert(row);
             }
             Edge ed = {row, col, value};
             bagap->async_insert(ed);
             top_row_ptr->async_insert(row);
+            A_column_degree->async_insert(col);
         });
         world.barrier();
 
@@ -211,21 +215,29 @@ int main(int argc, char** argv){
             if(config.enableTranspose || config.enableUndirected){
                 Edge rev = {col, row, value};
                 bagbp->async_insert(rev);
-                top_col_ptr->async_insert(row);
+                B_row_degree->async_insert(col);
             } else{
                 Edge ed = {row, col, value};
                 bagbp->async_insert(ed);
-                top_col_ptr->async_insert(col);
+                B_row_degree->async_insert(row);
             }
         });
         world.barrier();
 
         sorted_matrix = std::make_unique<ygm::container::array<Edge>>(world, *bagbp);
-        ygm::container::array<Edge> sorted_matrix(world, *bagbp);
         bagbp.reset();
+
+
+        // calculate the average degree in the network
+        A_deg_avg = unsorted_matrix->size() / (double)A_column_degree->size();
+        B_deg_avg = sorted_matrix->size() / (double)B_row_degree->size();
     } 
     else if(config.enableRMAT){
-
+        // currently RMAT does NOT work
+        if(world.rank0()){
+            std::cerr << "RMAT generator does not work properly. Please use CSV option instead." << std::endl;
+        }
+        return 1;
         if(config.scale <= 16){
             if(world.rank0()){
                 std::cerr << "RMAT Hashing function does not accept scale value below or equal to 16." << std::endl;
@@ -282,6 +294,22 @@ int main(int argc, char** argv){
         // NOTE: YGM::BAG'S CLEAR() DOES NOT DEALLOCATE THE MEMORY/CAPACITY
     }
     
+    int local_hub_count = 0;
+    A_column_degree->for_all([ &local_hub_count, &A_deg_avg](const uint32_t &key, const uint64_t &count){
+        if(count > A_deg_avg){
+            local_hub_count++;
+        }
+    });
+
+    static int global_hub_count = 0;
+    world.async(0, [](int local_count){
+        global_hub_count += local_count;
+    }, local_hub_count);
+    world.barrier();
+    int A_column_num = A_column_degree->size();
+    world.cout0("There are ", global_hub_count, " hubs out of ", A_column_num , " nodes in matrix A");
+
+    return 0;
     
     Sorted_COO test_COO(world, *sorted_matrix);
 

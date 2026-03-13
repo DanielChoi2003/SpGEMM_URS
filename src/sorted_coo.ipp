@@ -78,10 +78,10 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
     auto multiplier = [](auto pmap, auto self, 
                         uint64_t input_value, uint64_t input_row, uint64_t input_column){
         // CHANGE THIS FROM BINARY SEARCH TO CSR SEARCH
-        uint32_t loc = input_column - self->offset;
-        uint32_t global_offset = self->sorted_matrix.partitioner.local_start();
-        uint32_t start = global_offset + self->row_ptrs[loc];
-        uint32_t end = global_offset + self->row_ptrs[loc + 1]; // EXCLUSIVE
+        uint64_t loc = input_column - self->offset;
+        uint64_t global_offset = self->sorted_matrix.partitioner.local_start();
+        uint64_t start = global_offset + self->row_ptrs[loc];
+        uint64_t end = global_offset + self->row_ptrs[loc + 1]; // EXCLUSIVE
         for(; start < end; start++){
             Edge match_edge = {};  
             // local visit EXPECTS A GLOBAL INDEX. internally, converts it into a local index: 0 to local size
