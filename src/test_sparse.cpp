@@ -221,11 +221,13 @@ int main(int argc, char** argv){
         world.barrier();
 
         sorted_matrix = std::make_unique<ygm::container::array<Edge>>(world, *bagbp);
-        ygm::container::array<Edge> sorted_matrix(world, *bagbp);
         bagbp.reset();
     } 
     else if(config.enableRMAT){
-
+        // RMAT does not work currently
+        world.cout0("RMAT generator does not work as of now. Please use CSV option instead");
+        return 1;
+        
         if(config.scale <= 16){
             if(world.rank0()){
                 std::cerr << "RMAT Hashing function does not accept scale value below or equal to 16." << std::endl;
