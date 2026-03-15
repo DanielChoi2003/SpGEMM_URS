@@ -25,14 +25,14 @@ inline vector<uint64_t> Sorted_COO::get_owners(uint64_t source){
         return lhs.second < val;
     };  
    
-    auto it = std::lower_bound(row_owners.begin(), row_owners.end(), source, comp_second);
+    auto it = std::lower_bound(nonhub_row_owners.begin(), nonhub_row_owners.end(), source, comp_second);
 
     // if it is equal to the end iterator, then theres no owner
-    if(it != row_owners.end()){
-        uint64_t owner_rank = it - row_owners.begin();
+    if(it != nonhub_row_owners.end()){
+        uint64_t owner_rank = it - nonhub_row_owners.begin();
         
-        while(owner_rank < row_owners.size()){
-            if(row_owners[owner_rank].first <= source){
+        while(owner_rank < nonhub_row_owners.size()){
+            if(nonhub_row_owners[owner_rank].first <= source){
                 owners.push_back(owner_rank);
                 owner_rank++;
             }
@@ -79,13 +79,13 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
                         uint64_t input_value, uint64_t input_row, uint64_t input_column){
         // CHANGE THIS FROM BINARY SEARCH TO CSR SEARCH
         uint64_t loc = input_column - self->offset;
-        uint64_t global_offset = self->sorted_matrix.partitioner.local_start();
+        uint64_t global_offset = self->nonhub_edges.partitioner.local_start();
         uint64_t start = global_offset + self->row_ptrs[loc];
         uint64_t end = global_offset + self->row_ptrs[loc + 1]; // EXCLUSIVE
         for(; start < end; start++){
             Edge match_edge = {};  
             // local visit EXPECTS A GLOBAL INDEX. internally, converts it into a local index: 0 to local size
-            self->sorted_matrix.local_visit(start, [&match_edge](uint64_t index, Edge &edge){
+            self->nonhub_edges.local_visit(start, [&match_edge](uint64_t index, Edge &edge){
                 match_edge = edge;
             });
             // NOTE: could potentially overflow with large values

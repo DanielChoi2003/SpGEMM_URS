@@ -158,6 +158,7 @@ int main(int argc, char** argv){
     std::unique_ptr<ygm::container::array<Edge>> unsorted_matrix;
     auto A_column_degree = std::make_unique<ygm::container::counting_set<uint64_t>>(world);
     auto B_row_degree = std::make_unique<ygm::container::counting_set<uint64_t>>(world);
+    auto bagbp = std::make_unique<ygm::container::bag<Edge>>(world);
     double A_deg_avg, B_deg_avg; 
     if(config.enableCSV){
 
@@ -197,7 +198,6 @@ int main(int argc, char** argv){
         bagap.reset();
 
         // matrix B data extraction
-        auto bagbp = std::make_unique<ygm::container::bag<Edge>>(world);
         auto top_col_ptr = std::make_unique<ygm::container::counting_set<uint64_t>>(world);
         std::vector<std::string> files_B= {filename_B};
         std::fstream file_B(files_B[0]);
@@ -225,12 +225,12 @@ int main(int argc, char** argv){
         world.barrier();
 
         sorted_matrix = std::make_unique<ygm::container::array<Edge>>(world, *bagbp);
-        bagbp.reset();
+        //bagbp.reset();
 
 
         // calculate the average degree in the network
         A_deg_avg = unsorted_matrix->size() / (double)A_column_degree->size();
-        B_deg_avg = sorted_matrix->size() / (double)B_row_degree->size();
+        B_deg_avg = bagbp->size() / (double)B_row_degree->size();
     } 
     else if(config.enableRMAT){
         // currently RMAT does NOT work
@@ -294,24 +294,63 @@ int main(int argc, char** argv){
         // NOTE: YGM::BAG'S CLEAR() DOES NOT DEALLOCATE THE MEMORY/CAPACITY
     }
     
+    // FINDING HUBS
+    static int multiplier = 8;
+    static std::unordered_set<uint64_t> B_hubs;
     int local_hub_count = 0;
-    A_column_degree->for_all([ &local_hub_count, &A_deg_avg](const uint32_t &key, const uint64_t &count){
-        if(count > A_deg_avg){
+    int local_hub_edge_count = 0;
+    B_row_degree->for_all([ &local_hub_count, &B_deg_avg, 
+                            &local_hub_edge_count]
+                            (const uint64_t &key, const uint64_t &count){
+        if(count > B_deg_avg * multiplier){
             local_hub_count++;
+            local_hub_edge_count += count;
+            B_hubs.insert(key);
         }
     });
 
-    static int global_hub_count = 0;
-    world.async(0, [](int local_count){
-        global_hub_count += local_count;
-    }, local_hub_count);
+    if(world.rank() != 0){
+        auto sendHub = [](std::unordered_set<uint64_t> hubs){
+            B_hubs.insert(hubs.begin(), hubs.end());
+        };
+        world.async(0, sendHub, B_hubs);
+    }
     world.barrier();
-    int A_column_num = A_column_degree->size();
-    world.cout0("There are ", global_hub_count, " hubs out of ", A_column_num , " nodes in matrix A");
+    if(world.rank0()){
+        auto broadcastHub = [](std::unordered_set<uint64_t> hubs){
+            B_hubs = hubs;
+        };
+        world.async_bcast(broadcastHub, B_hubs);
+    }
+    world.barrier();
 
-    return 0;
+
+    static int global_hub_count = 0;
+    static int global_hub_edge_count = 0;
+    world.async(0, [](int local_hub, int local_edge){
+        global_hub_count += local_hub;
+        global_hub_edge_count += local_edge;
+    }, local_hub_count, local_hub_edge_count);
+    world.barrier();
+    int B_row_num = B_row_degree->size();
+    world.cout0("There are ", global_hub_count, " hubs out of ", B_row_num , " nodes in matrix A");
+    world.cout0("There are ", global_hub_edge_count, " hub edges out of ", sorted_matrix->size(), " edges in matrix A");
+
+    ygm::container::bag<Edge> bag_nonhub_edges(world);
+    ygm::container::bag<Edge> bag_hub_edges(world);
+    bagbp->for_all([&bag_nonhub_edges, &bag_hub_edges](const Edge& ed){
+        if(B_hubs.find(ed.row) != B_hubs.end()){ // HUB EDGE
+            bag_hub_edges.async_insert(ed);
+        }
+        else{
+            bag_nonhub_edges.async_insert(ed);
+        }
+    });
+
+    ygm::container::array<Edge> nonhub_edges(world, bag_nonhub_edges);
+    ygm::container::array<Edge> hub_edges(world, bag_hub_edges);
     
-    Sorted_COO test_COO(world, *sorted_matrix);
+    Sorted_COO test_COO(world, nonhub_edges, hub_edges, B_hubs);
 
     ygm::container::map<map_key, uint64_t> matrix_C(world); 
     double spgemm_start = MPI_Wtime();
