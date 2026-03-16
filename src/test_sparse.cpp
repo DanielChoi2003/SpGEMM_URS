@@ -36,6 +36,12 @@
     prepopulating the cache: moves the rehashing to the preprocessing part, preventing it from rehashing during multiplication
 */
 
+/* 3/16/2026
+ * hard-coded threshold for determining the hubs
+ * replicating the hub edges 
+ * use a set to determine if its a hub edge or not
+ * statistics for max and average (use ygm::max, ygm::sum) DONE
+*/
 struct Config{
     bool enableRMAT = false;
     int scale = -1;
@@ -294,7 +300,7 @@ int main(int argc, char** argv){
     }
     
     // FINDING HUBS
-    static int multiplier = 8;
+    static int multiplier = 1;
     static std::unordered_set<uint64_t> B_hubs;
     int local_hub_count = 0;
     int local_hub_edge_count = 0;

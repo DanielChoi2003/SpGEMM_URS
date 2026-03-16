@@ -145,8 +145,11 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
     }
     m_comm.barrier(); 
 
+    uint64_t mult_total = ygm::sum(mult_count, m_comm);
+    uint64_t mult_max  = ygm::max(mult_count, m_comm);
+    uint64_t mult_avg = mult_total / m_comm.size();
+    m_comm.cout0("Multiplication Count Max: ", mult_max, ", Multiplication Count Average: ", mult_avg);
     m_comm.stats_print();
-    m_comm.cout("Multiplication Count: ", mult_count, ", Addition Count: ", add_count);
 }
 
 
