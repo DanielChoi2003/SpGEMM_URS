@@ -21,6 +21,11 @@ inline vector<uint64_t> Sorted_COO::get_owners(uint64_t source){
 
     double st = MPI_Wtime();
     vector<uint64_t> owners;
+    // FIRST CHECK IF ITS A HUB ROW
+    if(B_hub_rows.find(source) != B_hub_rows.end()){ 
+        vector<uint64_t> hub_owners(hub_row_owners[source].begin(), hub_row_owners[source].end());
+        return hub_owners;
+    }
     auto comp_second = [](const std::pair<uint64_t, uint64_t>& lhs, uint64_t val) {
         return lhs.second < val;
     };  
@@ -74,30 +79,47 @@ template <class Matrix, class Accumulator>
 inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_accum){
     m_comm.stats_reset();
 
-
     auto multiplier = [](auto pmap, auto self, 
                         uint64_t input_value, uint64_t input_row, uint64_t input_column){
-        // CHANGE THIS FROM BINARY SEARCH TO CSR SEARCH
-        uint64_t loc = input_column - self->offset;
-        uint64_t global_offset = self->nonhub_edges.partitioner.local_start();
-        uint64_t start = global_offset + self->row_ptrs[loc];
-        uint64_t end = global_offset + self->row_ptrs[loc + 1]; // EXCLUSIVE
+        uint64_t loc;
+        uint64_t global_offset;
+        uint64_t start;
+        uint64_t end; // EXCLUSIVE
+        ygm::container::array<Edge> *edges;
+        if(self->B_hub_rows.find(input_column) != self->B_hub_rows.end()){ // IF HUB ROW
+            loc = input_column - self->hub_offset;
+            global_offset = self->hub_edges.partitioner.local_start();
+            start = global_offset + self->hub_row_ptrs[loc];
+            end = global_offset + self->hub_row_ptrs[loc + 1];
+            edges = &self->hub_edges;
+        }
+        else{
+            loc = input_column - self->offset;
+            global_offset = self->nonhub_edges.partitioner.local_start();
+            start = global_offset + self->row_ptrs[loc];
+            end = global_offset + self->row_ptrs[loc + 1];
+            edges = &self->nonhub_edges; 
+        }
+
+
         for(; start < end; start++){
             Edge match_edge = {};  
-            // local visit EXPECTS A GLOBAL INDEX. internally, converts it into a local index: 0 to local size
-            self->nonhub_edges.local_visit(start, [&match_edge](uint64_t index, Edge &edge){
+            edges->local_visit(start, [&match_edge](uint64_t index, Edge &edge){
                 match_edge = edge;
             });
+            
             // NOTE: could potentially overflow with large values
             uint64_t product = input_value * match_edge.value; // valueB * valueA;
+            self->mult_count++;
             if(product == 0){
                 continue;
             }
-            auto adder = [](const auto &key, auto &value, auto to_add){
+            auto adder = [](const auto &key, auto &value, auto to_add, auto self){
                 value += to_add;
+                self->add_count++;
             };
             // is there a way to locally store and then merge it later? to reduce the number of async messages
-            pmap->async_visit({input_row, match_edge.col}, adder, product); // Boost's hasher complains if I use a struct
+            pmap->async_visit({input_row, match_edge.col}, adder, product, self); // Boost's hasher complains if I use a struct
         } 
     }; 
     
@@ -106,7 +128,6 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
     // for(auto &ed : unsorted_matrix)
     //    for every X counter,
     //    m_comm.async_barrier(); interal buffer may be overflowing due to flooding
-    m_comm.barrier();
     size_t counter = 0;
     // ygm may be returning Edge by value, not by reference. hence, non-const cannot be bind to it.
     for(auto const &ptr : unsorted_matrix){
@@ -118,14 +139,14 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
                         pmap, pthis, input_value, input_row, input_column);
         counter++;
         if(counter == 100000){
-            m_comm.async_barrier();
+            //m_comm.async_barrier();
             counter = 0;
         }
     }
     m_comm.barrier(); 
 
     m_comm.stats_print();
-    //printf("Total owner search time: %f\n", owner_search_time);
+    m_comm.cout("Multiplication Count: ", mult_count, ", Addition Count: ", add_count);
 }
 
 

@@ -1,6 +1,5 @@
 #include "sorted_coo.hpp"
 #include "rmat_graph_generator/rmat_graph_generator.hpp"
-#include <ygm/container/bag.hpp>
 #include <ygm/io/csv_parser.hpp>
 #include <stdio.h>
 #include <unistd.h>
@@ -333,8 +332,8 @@ int main(int argc, char** argv){
     }, local_hub_count, local_hub_edge_count);
     world.barrier();
     int B_row_num = B_row_degree->size();
-    world.cout0("There are ", global_hub_count, " hubs out of ", B_row_num , " nodes in matrix A");
-    world.cout0("There are ", global_hub_edge_count, " hub edges out of ", sorted_matrix->size(), " edges in matrix A");
+    world.cout0("There are ", global_hub_count, " hubs out of ", B_row_num , " nodes in matrix B");
+    world.cout0("There are ", global_hub_edge_count, " hub edges out of ", sorted_matrix->size(), " edges in matrix B");
 
     ygm::container::bag<Edge> bag_nonhub_edges(world);
     ygm::container::bag<Edge> bag_hub_edges(world);
@@ -346,10 +345,10 @@ int main(int argc, char** argv){
             bag_nonhub_edges.async_insert(ed);
         }
     });
-
+    bagbp.reset();
     ygm::container::array<Edge> nonhub_edges(world, bag_nonhub_edges);
     ygm::container::array<Edge> hub_edges(world, bag_hub_edges);
-    
+    world.barrier();
     Sorted_COO test_COO(world, nonhub_edges, hub_edges, B_hubs);
 
     ygm::container::map<map_key, uint64_t> matrix_C(world); 

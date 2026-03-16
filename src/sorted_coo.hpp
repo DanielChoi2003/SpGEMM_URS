@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <cassert>
 #include <vector>
+#include <unordered_set>
+#include <unordered_map>
 
 struct map_key{
     uint64_t x;
@@ -78,7 +80,9 @@ public:
 
         double sort_start = MPI_Wtime();
         nonhub_edges.sort();
-        hub_edges.sort();
+        if(hub_edges.size() > 1){
+            hub_edges.sort();
+        }
         m_comm.barrier(); 
         m_comm.cout0("ygm array sort time: ", MPI_Wtime() - sort_start);
         
@@ -86,44 +90,45 @@ public:
 
         hub_edges.for_all([this](const int &index, const Edge &ed){
             // INSERT THE OWNER RANK IF IT DOES NOT EXIST
-            if(this->hub_row_owners[ed.row].count(this->m_comm.rank()) == 0){
-                this->hub_row_owners[ed.row].insert(this->m_comm.rank());
-            }
+            this->hub_row_owners[ed.row].insert(this->m_comm.rank());
         });
 
-        // flatten before sending
-        // unordered_map is not serializable
-        std::vector<std::pair<uint64_t, std::vector<uint32_t>>> flat;
-        for(auto& [key, inner_set] : hub_row_owners){
-            flat.push_back({key, std::vector<uint32_t>(inner_set.begin(), inner_set.end())});
-        }
-        
-        if(m_comm.rank() != 0){
-            auto sendHubOwner = [](auto self,
-                                   std::vector<std::pair<uint64_t, std::vector<uint32_t>>> hub_other_owners){
-                for(auto& [key, vec] : hub_other_owners){
-                    self->hub_row_owners[key].insert(vec.begin(), vec.end());
-                }           
-            };
-            m_comm.async(0, sendHubOwner, pthis, flat);
-        }
-        m_comm.barrier();
-
-        if(m_comm.rank0()){
-            flat.clear(); // flatten it again for rank 0
+        if(!hub_row_owners.empty()){
+            // flatten before sending
+            // unordered_map is not serializable
+            std::vector<std::pair<uint64_t, std::vector<uint32_t>>> flat;
             for(auto& [key, inner_set] : hub_row_owners){
                 flat.push_back({key, std::vector<uint32_t>(inner_set.begin(), inner_set.end())});
             }
-            auto broadcastHubOwner = [](auto self,
-                                        std::vector<std::pair<uint64_t, std::vector<uint32_t>>> hub_all_owners){
-                for(auto& [key, vec] : hub_all_owners){
-                    self->hub_row_owners[key].insert(vec.begin(), vec.end());
-                }  
-            };
-            m_comm.async_bcast(broadcastHubOwner, pthis, flat);
+            
+            if(m_comm.rank() != 0){
+                auto sendHubOwner = [](auto self,
+                                    std::vector<std::pair<uint64_t, std::vector<uint32_t>>> hub_other_owners){
+                    for(auto& [key, vec] : hub_other_owners){
+                        self->hub_row_owners[key].insert(vec.begin(), vec.end());
+                    }           
+                };
+                m_comm.async(0, sendHubOwner, pthis, flat);
+            }
+            m_comm.barrier();
+
+            if(m_comm.rank0()){
+                flat.clear(); // flatten it again for rank 0
+                for(auto& [key, inner_set] : hub_row_owners){
+                    flat.push_back({key, std::vector<uint32_t>(inner_set.begin(), inner_set.end())});
+                }
+                auto broadcastHubOwner = [](auto self,
+                                            std::vector<std::pair<uint64_t, std::vector<uint32_t>>> hub_all_owners){
+                    for(auto& [key, vec] : hub_all_owners){
+                        self->hub_row_owners[key].insert(vec.begin(), vec.end());
+                    }  
+                };
+                m_comm.async_bcast(broadcastHubOwner, pthis, flat);
+            }
         }
         m_comm.barrier();
 
+        //  NONHUB EDGE ROW OWNERS
         uint64_t first = (*nonhub_edges.local_cbegin()).value.row;
         uint64_t last = -1;
         auto it = nonhub_edges.local_cbegin();
@@ -131,7 +136,17 @@ public:
             last = it.operator*().value.row;
         }
 
-        // POPULATING THE ROW PTRS
+        //m_comm.cout("Before accessing hub edge iterator");
+        // HUB EDGE ROW OWNERS
+        uint64_t hub_first = (*hub_edges.local_cbegin()).value.row;
+        uint64_t hub_last = -1;
+        it = hub_edges.local_cbegin();
+        for(;it != hub_edges.local_cend(); it.operator++()){
+            hub_last = it.operator*().value.row;
+        }
+        //m_comm.cout("After accessing hub edge iterator");
+
+        // POPULATING THE ROW PTRS FOR NONHUB EDGES
         // plus one to get the range of rows, additional plus one for row ptr's last index
         row_ptrs.resize(last - first + 2);
         offset = first;
@@ -147,6 +162,26 @@ public:
             row_index++;
         }
         row_ptrs.back() = row_index; // last index + 1
+
+        // POPULATING THE ROW PTRS FOR HUB EDGES
+        hub_row_ptrs.resize(hub_last - hub_first + 2);
+        hub_offset = hub_first;
+        curr = hub_edges.local_cbegin();
+        row_index = 0;
+        ptr_index = 0; // index of the row ptrs 
+        hub_row_ptrs[ptr_index] = row_index;
+        for(;curr != hub_edges.local_cend(); ++curr){
+            while((hub_offset + ptr_index) != (*curr).value.row){
+                ptr_index++;
+                hub_row_ptrs[ptr_index] = row_index;
+            }
+            row_index++;
+        }
+        hub_row_ptrs.back() = row_index; // last index + 1
+        // for(int i = 0; i < hub_row_ptrs.size() - 1; i++){
+        //     m_comm.cout("For row ", i + hub_offset, ", begin: ", hub_row_ptrs[i], " and end: ", hub_row_ptrs[i + 1]);
+        // }
+
         m_comm.barrier(); 
         double map_end = MPI_Wtime();
         m_comm.cout0("row-owner map initialization time: ", map_end - map_start);
@@ -241,7 +276,11 @@ private:
     */
     std::unordered_set<uint64_t> &B_hub_rows;
     std::unordered_map<uint64_t, std::unordered_set<uint32_t>> hub_row_owners;
+    std::vector<uint64_t> hub_row_ptrs;
+    uint64_t hub_offset;
 
+    // KEEP TRACK OF EACH RANK'S # OF MULTIPLICATION AND ADDITION
+    uint64_t mult_count = 0, add_count = 0;
 };
 
 
