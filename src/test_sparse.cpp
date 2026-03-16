@@ -41,6 +41,7 @@
  * replicating the hub edges 
  * use a set to determine if its a hub edge or not
  * statistics for max and average (use ygm::max, ygm::sum) DONE
+ * Setting a memory threshold for replicated hub edges?
 */
 struct Config{
     bool enableRMAT = false;
@@ -231,11 +232,6 @@ int main(int argc, char** argv){
 
         sorted_matrix = std::make_unique<ygm::container::array<Edge>>(world, *bagbp);
         //bagbp.reset();
-
-
-        // calculate the average degree in the network
-        A_deg_avg = unsorted_matrix->size() / (double)A_column_degree->size();
-        B_deg_avg = bagbp->size() / (double)B_row_degree->size();
     } 
     else if(config.enableRMAT){
         // currently RMAT does NOT work
@@ -300,14 +296,14 @@ int main(int argc, char** argv){
     }
     
     // FINDING HUBS
-    static int multiplier = 1;
+    static int threshold = world.size() * 16;
     static std::unordered_set<uint64_t> B_hubs;
     int local_hub_count = 0;
     int local_hub_edge_count = 0;
-    B_row_degree->for_all([ &local_hub_count, &B_deg_avg, 
+    B_row_degree->for_all([ &local_hub_count, 
                             &local_hub_edge_count]
                             (const uint64_t &key, const uint64_t &count){
-        if(count > B_deg_avg * multiplier){
+        if(count > threshold){
             local_hub_count++;
             local_hub_edge_count += count;
             B_hubs.insert(key);
@@ -351,11 +347,14 @@ int main(int argc, char** argv){
             bag_nonhub_edges.async_insert(ed);
         }
     });
-    bagbp.reset();
+
     ygm::container::array<Edge> nonhub_edges(world, bag_nonhub_edges);
-    ygm::container::array<Edge> hub_edges(world, bag_hub_edges);
+    std::vector<Edge> hub_edges;
+    bag_hub_edges.gather(hub_edges);
+    world.cout0("hub edge count: ", hub_edges.size());
     world.barrier();
     Sorted_COO test_COO(world, nonhub_edges, hub_edges, B_hubs);
+    bagbp.reset();
 
     ygm::container::map<map_key, uint64_t> matrix_C(world); 
     double spgemm_start = MPI_Wtime();

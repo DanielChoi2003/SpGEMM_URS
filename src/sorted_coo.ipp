@@ -21,15 +21,10 @@ inline vector<uint64_t> Sorted_COO::get_owners(uint64_t source){
 
     double st = MPI_Wtime();
     vector<uint64_t> owners;
-    // FIRST CHECK IF ITS A HUB ROW
-    if(B_hub_rows.find(source) != B_hub_rows.end()){ 
-        vector<uint64_t> hub_owners(hub_row_owners[source].begin(), hub_row_owners[source].end());
-        return hub_owners;
-    }
-    auto comp_second = [](const std::pair<uint64_t, uint64_t>& lhs, uint64_t val) {
+    auto comp_second = [](const std::pair<int, int>& lhs, int val) {
         return lhs.second < val;
     };  
-   
+     
     auto it = std::lower_bound(nonhub_row_owners.begin(), nonhub_row_owners.end(), source, comp_second);
 
     // if it is equal to the end iterator, then theres no owner
@@ -81,30 +76,14 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
 
     auto multiplier = [](auto pmap, auto self, 
                         uint64_t input_value, uint64_t input_row, uint64_t input_column){
-        uint64_t loc;
-        uint64_t global_offset;
-        uint64_t start;
-        uint64_t end; // EXCLUSIVE
-        ygm::container::array<Edge> *edges;
-        if(self->B_hub_rows.find(input_column) != self->B_hub_rows.end()){ // IF HUB ROW
-            loc = input_column - self->hub_offset;
-            global_offset = self->hub_edges.partitioner.local_start();
-            start = global_offset + self->hub_row_ptrs[loc];
-            end = global_offset + self->hub_row_ptrs[loc + 1];
-            edges = &self->hub_edges;
-        }
-        else{
-            loc = input_column - self->offset;
-            global_offset = self->nonhub_edges.partitioner.local_start();
-            start = global_offset + self->row_ptrs[loc];
-            end = global_offset + self->row_ptrs[loc + 1];
-            edges = &self->nonhub_edges; 
-        }
-
-
+        uint64_t loc = input_column - self->offset;
+        uint64_t global_offset = self->nonhub_edges.partitioner.local_start();
+        uint64_t start = global_offset + self->row_ptrs[loc];
+        uint64_t end = global_offset + self->row_ptrs[loc + 1]; // EXCLUSIVE
+            
         for(; start < end; start++){
             Edge match_edge = {};  
-            edges->local_visit(start, [&match_edge](uint64_t index, Edge &edge){
+            self->nonhub_edges.local_visit(start, [&match_edge](uint64_t index, Edge &edge){
                 match_edge = edge;
             });
             
@@ -135,8 +114,31 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
         uint64_t input_column = ed.col;
         uint64_t input_row = ed.row;
         uint64_t input_value = ed.value;
-        async_visit_row(input_column, multiplier, 
+        if(B_hub_rows.find(input_column) != B_hub_rows.end()){
+            uint64_t loc = input_column - hub_offset;
+            uint64_t start = hub_row_ptrs[loc];
+            uint64_t end = hub_row_ptrs[loc + 1];
+            for(; start < end; start++){
+                Edge match_edge = hub_edges[start];  
+                
+                // NOTE: could potentially overflow with large values
+                uint64_t product = input_value * match_edge.value; // valueB * valueA;
+                mult_count++;
+                if(product == 0){
+                    continue;
+                }
+                auto adder = [](const auto &key, auto &value, auto to_add, auto self){
+                    value += to_add;
+                    self->add_count++;
+                };
+                pmap->async_visit({input_row, match_edge.col}, adder, product, pthis); 
+            } 
+        }
+        else{
+            async_visit_row(input_column, multiplier, 
                         pmap, pthis, input_value, input_row, input_column);
+        }
+
         counter++;
         if(counter == 100000){
             //m_comm.async_barrier();
