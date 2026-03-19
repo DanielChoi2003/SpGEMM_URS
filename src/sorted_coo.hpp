@@ -211,7 +211,7 @@ public:
 private:
     ygm::comm &m_comm;                            // store the communicator. Hence the &
     ygm::container::array<Edge> &nonhub_edges;         // globally sorted nonhub edges
-    std::vector<Edge> &hub_edges;            // globally sorted hub edges
+    std::vector<Edge> &hub_edges;           
     typename ygm::ygm_ptr<Sorted_COO> pthis;
   
     double owner_search_time = 0;

@@ -296,6 +296,7 @@ int main(int argc, char** argv){
     }
     
     // FINDING HUBS
+    double hub_processing_time = MPI_Wtime();
     static int threshold = world.size() * 16;
     static std::unordered_set<uint64_t> B_hubs;
     int local_hub_count = 0;
@@ -351,8 +352,9 @@ int main(int argc, char** argv){
     ygm::container::array<Edge> nonhub_edges(world, bag_nonhub_edges);
     std::vector<Edge> hub_edges;
     bag_hub_edges.gather(hub_edges);
-    world.cout0("hub edge count: ", hub_edges.size());
     world.barrier();
+    world.cout0("Hub pre-processing time: ", MPI_Wtime() - hub_processing_time);
+
     Sorted_COO test_COO(world, nonhub_edges, hub_edges, B_hubs);
     bagbp.reset();
 
