@@ -1,5 +1,6 @@
 #include "sorted_coo.hpp"
 #include "rmat_graph_generator/rmat_graph_generator.hpp"
+#include "shm_hub/shm_hub.h"
 #include <ygm/io/csv_parser.hpp>
 #include <stdio.h>
 #include <unistd.h>
@@ -7,6 +8,7 @@
 #include <ctime>
 #include <string>
 #include <filesystem>
+#include <algorithm>
 #include <boost/container_hash/hash.hpp>
 
 /*
@@ -295,167 +297,98 @@ int main(int argc, char** argv){
         // NOTE: YGM::BAG'S CLEAR() DOES NOT DEALLOCATE THE MEMORY/CAPACITY
     }
     
-    // FINDING HUBS
-    static int threshold = world.size() * 16;
-    static std::unordered_set<uint64_t> B_hubs;
-    int local_hub_count = 0;
-    int local_hub_edge_count = 0;
-    B_row_degree->for_all([ &local_hub_count, 
-                            &local_hub_edge_count]
-                            (const uint64_t &key, const uint64_t &count){
-        if(count > threshold){
-            local_hub_count++;
-            local_hub_edge_count += count;
-            B_hubs.insert(key);
-        }
-    });
+    static size_t topk = 1000;
+    size_t max_hub_edges = 1024*1024; // NOT A STRICT CAP; MAY EXCEED
+    std::unique_ptr<ygm::container::array<Edge>> nonhub_edges;
+    shm_hub<Edge> SHM_HUB(world, topk, max_hub_edges, B_row_degree, nonhub_edges, bagbp);
 
-    if(world.rank() != 0){
-        auto sendHub = [](std::unordered_set<uint64_t> hubs){
-            B_hubs.insert(hubs.begin(), hubs.end());
-        };
-        world.async(0, sendHub, B_hubs);
-    }
-    world.barrier();
-    if(world.rank0()){
-        auto broadcastHub = [](std::unordered_set<uint64_t> hubs){
-            B_hubs = hubs;
-        };
-        world.async_bcast(broadcastHub, B_hubs);
-    }
-    world.barrier();
-
-
-    static int global_hub_count = 0;
-    static int global_hub_edge_count = 0;
-    world.async(0, [](int local_hub, int local_edge){
-        global_hub_count += local_hub;
-        global_hub_edge_count += local_edge;
-    }, local_hub_count, local_hub_edge_count);
-    world.barrier();
-    int B_row_num = B_row_degree->size();
-    world.cout0("There are ", global_hub_count, " hubs out of ", B_row_num , " nodes in matrix B");
-    world.cout0("There are ", global_hub_edge_count, " hub edges out of ", sorted_matrix->size(), " edges in matrix B");
-
-    ygm::container::bag<Edge> bag_nonhub_edges(world);
-    ygm::container::bag<Edge> bag_hub_edges(world);
-    bagbp->for_all([&bag_nonhub_edges, &bag_hub_edges](const Edge& ed){
-        if(B_hubs.find(ed.row) != B_hubs.end()){ // HUB EDGE
-            bag_hub_edges.async_insert(ed);
-        }
-        else{
-            bag_nonhub_edges.async_insert(ed);
-        }
-    });
-
-    ygm::container::array<Edge> nonhub_edges(world, bag_nonhub_edges);
-    std::vector<Edge> hub_edges;
-    bag_hub_edges.gather(hub_edges);
-    world.cout0("hub edge count: ", hub_edges.size());
-    world.barrier();
-    Sorted_COO test_COO(world, nonhub_edges, hub_edges, B_hubs);
-    bagbp.reset();
-
-    ygm::container::map<map_key, uint64_t> matrix_C(world); 
-    double spgemm_start = MPI_Wtime();
-    test_COO.spGemm(*unsorted_matrix, matrix_C);
-    world.barrier();
-    double spgemm_end = MPI_Wtime();    
-    world.cout0("Total number of cores: ", world.size());
-    world.cout0("matrix multiplication time: ", spgemm_end - spgemm_start);
-
-    world.cout0("matrix C size: ", matrix_C.size());
-    // MEASURE PUSHES INTO MATRIX C
-    // auto counter_comp = [](auto const &a, auto const &b){
-    //     if(a.second.push == b.second.push){
-    //         return a.second.sum > b.second.sum;
-    //     }
-    //     return a.second.push > b.second.push;
-    // };
-    // auto top_k = matrix_C.gather_topk(10, counter_comp);
-
+    return 0;
+    // Replace HUB_EDGES and B_HUBS with SHM_HUB object!
+    // Sorted_COO test_COO(world, nonhub_edges, hub_edges, B_hubs);
+    // ygm::container::map<map_key, uint64_t> matrix_C(world); 
+    // double spgemm_start = MPI_Wtime();
+    // test_COO.spGemm(*unsorted_matrix, matrix_C);
     // world.barrier();
-    // if(world.rank0()){
-    //     for(auto &top_entry : top_k){
-    //         printf("(%d, %d) had push counter of %d\n", top_entry.first.x, top_entry.first.y, top_entry.second.push);
+    // double spgemm_end = MPI_Wtime();    
+    // world.cout0("Total number of cores: ", world.size());
+    // world.cout0("matrix multiplication time: ", spgemm_end - spgemm_start);
+
+    // world.cout0("matrix C size: ", matrix_C.size());   
+
+    // if(config.enableOutput){
+    //     ygm::container::bag<Edge> global_bag_C(world);
+    //     matrix_C.for_all([&global_bag_C](map_key coord, auto value){
+    //         global_bag_C.async_insert({coord.x, coord.y, value});
+    //     });
+    //     world.barrier();
+
+    //     std::vector<Edge> sorted_output_C;
+    //     global_bag_C.gather(sorted_output_C, 0);
+    //     if(world.rank0()){
+    //         std::ofstream output_file;
+    //         output_file.open(config.outputFile);
+    //         std::sort(sorted_output_C.begin(), sorted_output_C.end());
+    //         for(Edge &ed : sorted_output_C){
+    //             output_file << ed.row << "," << ed.col << "," << ed.value << "\n";
+    //         }
+    //         output_file.close();    
     //     }
     // }
-   
-
-    if(config.enableOutput){
-        ygm::container::bag<Edge> global_bag_C(world);
-        matrix_C.for_all([&global_bag_C](map_key coord, auto value){
-            global_bag_C.async_insert({coord.x, coord.y, value});
-        });
-        world.barrier();
-
-        std::vector<Edge> sorted_output_C;
-        global_bag_C.gather(sorted_output_C, 0);
-        if(world.rank0()){
-            std::ofstream output_file;
-            output_file.open(config.outputFile);
-            std::sort(sorted_output_C.begin(), sorted_output_C.end());
-            for(Edge &ed : sorted_output_C){
-                output_file << ed.row << "," << ed.col << "," << ed.value << "\n";
-            }
-            output_file.close();    
-        }
-    }
     
-    if(config.enableCSVCompare){
-        /*
-         * If output file has already been created, use it.
-         * else, create a temporary output file
-        */
-        std::string output = "output.csv";
-        std::string expected_output = config.outputCompare;
+    // if(config.enableCSVCompare){
+    //     /*
+    //      * If output file has already been created, use it.
+    //      * else, create a temporary output file
+    //     */
+    //     std::string output = "output.csv";
+    //     std::string expected_output = config.outputCompare;
 
-        if(config.enableOutput){
-            output = config.outputFile;
-        }
-        else{
-            ygm::container::bag<Edge> global_bag_C(world);
-            matrix_C.for_all([&global_bag_C](map_key coord, auto value){
-                global_bag_C.async_insert({coord.x, coord.y, value});
-            });
-            world.barrier();
+    //     if(config.enableOutput){
+    //         output = config.outputFile;
+    //     }
+    //     else{
+    //         ygm::container::bag<Edge> global_bag_C(world);
+    //         matrix_C.for_all([&global_bag_C](map_key coord, auto value){
+    //             global_bag_C.async_insert({coord.x, coord.y, value});
+    //         });
+    //         world.barrier();
 
-            std::vector<Edge> sorted_output_C;
-            global_bag_C.gather(sorted_output_C, 0);
-            if(world.rank0()){
-                std::ofstream output_file;
-                output_file.open(output);
-                std::sort(sorted_output_C.begin(), sorted_output_C.end());
-                for(Edge &ed : sorted_output_C){
-                    output_file << ed.row << "," << ed.col << "," << ed.value << "\n";
-                }
-                output_file.close();
-            }
-        }
+    //         std::vector<Edge> sorted_output_C;
+    //         global_bag_C.gather(sorted_output_C, 0);
+    //         if(world.rank0()){
+    //             std::ofstream output_file;
+    //             output_file.open(output);
+    //             std::sort(sorted_output_C.begin(), sorted_output_C.end());
+    //             for(Edge &ed : sorted_output_C){
+    //                 output_file << ed.row << "," << ed.col << "," << ed.value << "\n";
+    //             }
+    //             output_file.close();
+    //         }
+    //     }
 
-        if(world.rank0()){
-            // ignore all: > /dev/null 2>&1
-            pid_t pid = getpid();
-            time_t now = time(0);
-            std::string unique_id = std::to_string(pid) + std::to_string(now);
-            std::string cmd = "diff -y --suppress-common-lines "
-                            + output + " " + expected_output + 
-                            " > " + unique_id + "_nodes_difference.txt";
-            int result = system(cmd.c_str());
+    //     if(world.rank0()){
+    //         // ignore all: > /dev/null 2>&1
+    //         pid_t pid = getpid();
+    //         time_t now = time(0);
+    //         std::string unique_id = std::to_string(pid) + std::to_string(now);
+    //         std::string cmd = "diff -y --suppress-common-lines "
+    //                         + output + " " + expected_output + 
+    //                         " > " + unique_id + "_nodes_difference.txt";
+    //         int result = system(cmd.c_str());
 
-            std::filesystem::remove("./output.csv");
-            if (result == 0) {
-                std::cout << "Files match!\n";
-                std::filesystem::remove(
-                            "../strong_scaling_output/epinions_results/" +
-                            unique_id + 
-                            "_nodes_difference.txt"
-                        );
-            } else {
-                std::cout << "Files differ!\n";
-            }
-        }
-    }
+    //         std::filesystem::remove("./output.csv");
+    //         if (result == 0) {
+    //             std::cout << "Files match!\n";
+    //             std::filesystem::remove(
+    //                         "../strong_scaling_output/epinions_results/" +
+    //                         unique_id + 
+    //                         "_nodes_difference.txt"
+    //                     );
+    //         } else {
+    //             std::cout << "Files differ!\n";
+    //         }
+    //     }
+    // }
    
     
 
