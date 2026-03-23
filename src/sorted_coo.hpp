@@ -1,4 +1,6 @@
 #pragma once
+
+#include "shm_hub/shm_hub.h"
 #include <ygm/comm.hpp>
 #include <ygm/container/map.hpp>
 #include <ygm/container/bag.hpp>
@@ -62,6 +64,10 @@ struct Edge{
 
 class Sorted_COO{
 
+private:
+    std::unique_ptr<ygm::container::array<Edge>> nonhub_edges;         // globally sorted nonhub edges
+    shm_hub<Edge> SHM_HUB;
+
 public:
 
     /*
@@ -70,43 +76,35 @@ public:
         @param ygm::comm&: communicator object
         @param ygm::container::array<Edge>& src: array that will be sorted in the constructor.
     */
-    explicit Sorted_COO(ygm::comm& c, ygm::container::array<Edge>& nonhub_edges,
-                        std::vector<Edge>& hub_edges, std::unordered_set<uint64_t> &B_hubs): 
-                        m_comm(c), nonhub_edges(nonhub_edges), 
-                        hub_edges(hub_edges), pthis(this), B_hub_rows(B_hubs)            
+    explicit Sorted_COO(ygm::comm& c, const uint32_t& topk, const uint32_t& max_hub_edges,
+                        std::unique_ptr<ygm::container::counting_set<uint64_t>>& matrix_B_row_degree,
+                        std::unique_ptr<ygm::container::bag<Edge>>& matrix_B_bag
+                        ): 
+                        m_comm(c), pthis(this),
+                        SHM_HUB(c, topk, max_hub_edges, nonhub_edges, matrix_B_row_degree, matrix_B_bag)         
     {
         pthis.check(m_comm);
         nonhub_row_owners.resize(m_comm.size());
-
-        double sort_start = MPI_Wtime();
-        nonhub_edges.sort();
-        sort(hub_edges.begin(), hub_edges.end());
-        m_comm.barrier(); 
-        m_comm.cout0("ygm array sort time: ", MPI_Wtime() - sort_start);
         
         double map_start = MPI_Wtime();
         
         //  NONHUB EDGE ROW OWNERS
-        uint64_t first = (*nonhub_edges.local_cbegin()).value.row;
+        uint64_t first = (*nonhub_edges->local_cbegin()).value.row;
         uint64_t last = -1;
-        auto it = nonhub_edges.local_cbegin();
-        for(;it != nonhub_edges.local_cend(); it.operator++()){
+        auto it = nonhub_edges->local_cbegin();
+        for(;it != nonhub_edges->local_cend(); it.operator++()){
             last = it.operator*().value.row;
         }
-
-        // HUB EDGE ROW OWNERS
-        uint64_t hub_first = hub_edges.front().row;
-        uint64_t hub_last = hub_edges.back().row;
 
         // POPULATING THE ROW PTRS FOR NONHUB EDGES
         // plus one to get the range of rows, additional plus one for row ptr's last index
         row_ptrs.resize(last - first + 2);
         offset = first;
-        auto curr = nonhub_edges.local_cbegin();
+        auto curr = nonhub_edges->local_cbegin();
         uint64_t row_index = 0;
         uint64_t ptr_index = 0; // index of the row ptrs 
         row_ptrs[ptr_index] = row_index;
-        for(;curr != nonhub_edges.local_cend(); ++curr){
+        for(;curr != nonhub_edges->local_cend(); ++curr){
             while((offset + ptr_index) != (*curr).value.row){
                 ptr_index++;
                 row_ptrs[ptr_index] = row_index;
@@ -115,25 +113,23 @@ public:
         }
         row_ptrs.back() = row_index; // last index + 1
 
+        uint64_t hub_first = SHM_HUB.front()->row;
+        uint64_t hub_last = SHM_HUB.back()->row;
         // POPULATING THE ROW PTRS FOR HUB EDGES
         hub_row_ptrs.resize(hub_last - hub_first + 2);
         hub_offset = hub_first;
-        auto hub_curr = hub_edges.begin();
         row_index = 0;
         ptr_index = 0; // index of the row ptrs 
         hub_row_ptrs[ptr_index] = row_index;
-        for(;hub_curr != hub_edges.end(); ++hub_curr){
-            while((hub_offset + ptr_index) != (*hub_curr).row){
+        for(uint32_t i = 0; i < SHM_HUB.size(); i++){
+            while((hub_offset + ptr_index) != SHM_HUB.get_IP_ptr(i)->row){
                 ptr_index++;
                 hub_row_ptrs[ptr_index] = row_index;
             }
             row_index++;
         }
         hub_row_ptrs.back() = row_index; // last index + 1
-        // for(int i = 0; i < hub_row_ptrs.size() - 1; i++){
-        //     m_comm.cout("For row ", i + hub_offset, ", begin: ", hub_row_ptrs[i], " and end: ", hub_row_ptrs[i + 1]);
-        // }
-
+    
         m_comm.barrier(); 
         double map_end = MPI_Wtime();
         m_comm.cout0("row-owner map initialization time: ", map_end - map_start);
@@ -209,15 +205,14 @@ public:
 
 
 private:
-    ygm::comm &m_comm;                            // store the communicator. Hence the &
-    ygm::container::array<Edge> &nonhub_edges;         // globally sorted nonhub edges
-    std::vector<Edge> &hub_edges;            // globally sorted hub edges
+    ygm::comm &m_comm;                                                 // store the communicator. Hence the &
     typename ygm::ygm_ptr<Sorted_COO> pthis;
   
     double owner_search_time = 0;
     /*
      * nonhub edges' rows are diverse, which can be expensive to store in a map
      * ISSUE: nonhub_row_owners metadata will most likely direct it to the wrong owner if the row is a hub row
+     * SOLUTION: determine ahead whether a row is a hub row or not before searching for owners
     */
     std::vector<std::pair<uint64_t, uint64_t>> nonhub_row_owners; // for nonhub edges
     std::vector<uint64_t> row_ptrs;
@@ -226,7 +221,6 @@ private:
      * hub edges' rows are not diverse as nonhub edges; they are concentrated in few rows
      * hence, it may be more appropriate to use a map for simplicity and speed
     */
-    std::unordered_set<uint64_t> &B_hub_rows;
     std::vector<uint64_t> hub_row_ptrs;
     uint64_t hub_offset;
 

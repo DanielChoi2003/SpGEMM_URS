@@ -77,13 +77,13 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
     auto multiplier = [](auto pmap, auto self, 
                         uint64_t input_value, uint64_t input_row, uint64_t input_column){
         uint64_t loc = input_column - self->offset;
-        uint64_t global_offset = self->nonhub_edges.partitioner.local_start();
+        uint64_t global_offset = self->nonhub_edges->partitioner.local_start();
         uint64_t start = global_offset + self->row_ptrs[loc];
         uint64_t end = global_offset + self->row_ptrs[loc + 1]; // EXCLUSIVE
             
         for(; start < end; start++){
             Edge match_edge = {};  
-            self->nonhub_edges.local_visit(start, [&match_edge](uint64_t index, Edge &edge){
+            self->nonhub_edges->local_visit(start, [&match_edge](uint64_t index, Edge &edge){
                 match_edge = edge;
             });
             
@@ -103,10 +103,6 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
     }; 
     
     ygm::ygm_ptr<Accumulator> pmap(&partial_accum);
-    // URGENT:
-    // for(auto &ed : unsorted_matrix)
-    //    for every X counter,
-    //    m_comm.async_barrier(); interal buffer may be overflowing due to flooding
     size_t counter = 0;
     // ygm may be returning Edge by value, not by reference. hence, non-const cannot be bind to it.
     for(auto const &ptr : unsorted_matrix){
@@ -114,12 +110,15 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
         uint64_t input_column = ed.col;
         uint64_t input_row = ed.row;
         uint64_t input_value = ed.value;
+        std::unordered_set<uint64_t> const& B_hub_rows = SHM_HUB.get_hub_set();
         if(B_hub_rows.find(input_column) != B_hub_rows.end()){
+
+            // shm hub should return an Edge* pointer 
             uint64_t loc = input_column - hub_offset;
             uint64_t start = hub_row_ptrs[loc];
             uint64_t end = hub_row_ptrs[loc + 1];
             for(; start < end; start++){
-                Edge match_edge = hub_edges[start];  
+                Edge match_edge = *(SHM_HUB.get_IP_ptr(start));  
                 
                 // NOTE: could potentially overflow with large values
                 uint64_t product = input_value * match_edge.value; // valueB * valueA;
@@ -137,12 +136,6 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
         else{
             async_visit_row(input_column, multiplier, 
                         pmap, pthis, input_value, input_row, input_column);
-        }
-
-        counter++;
-        if(counter == 100000){
-            //m_comm.async_barrier();
-            counter = 0;
         }
     }
     m_comm.barrier(); 

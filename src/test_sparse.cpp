@@ -231,9 +231,6 @@ int main(int argc, char** argv){
             }
         });
         world.barrier();
-
-        sorted_matrix = std::make_unique<ygm::container::array<Edge>>(world, *bagbp);
-        //bagbp.reset();
     } 
     else if(config.enableRMAT){
         // currently RMAT does NOT work
@@ -297,98 +294,96 @@ int main(int argc, char** argv){
         // NOTE: YGM::BAG'S CLEAR() DOES NOT DEALLOCATE THE MEMORY/CAPACITY
     }
     
-    static size_t topk = 1000;
-    size_t max_hub_edges = 1024*1024; // NOT A STRICT CAP; MAY EXCEED
-    std::unique_ptr<ygm::container::array<Edge>> nonhub_edges;
-    shm_hub<Edge> SHM_HUB(world, topk, max_hub_edges, B_row_degree, nonhub_edges, bagbp);
-
-    return 0;
+    static uint32_t topk = 1000;
+    uint32_t max_hub_edges = 1024*1024; // NOT A STRICT CAP; MAY EXCEED
     // Replace HUB_EDGES and B_HUBS with SHM_HUB object!
-    // Sorted_COO test_COO(world, nonhub_edges, hub_edges, B_hubs);
-    // ygm::container::map<map_key, uint64_t> matrix_C(world); 
-    // double spgemm_start = MPI_Wtime();
-    // test_COO.spGemm(*unsorted_matrix, matrix_C);
-    // world.barrier();
-    // double spgemm_end = MPI_Wtime();    
-    // world.cout0("Total number of cores: ", world.size());
-    // world.cout0("matrix multiplication time: ", spgemm_end - spgemm_start);
+    double COO_generation = MPI_Wtime();
+    Sorted_COO test_COO(world, topk, max_hub_edges, B_row_degree, bagbp);
+    world.cout0("COO generation time: ", MPI_Wtime() - COO_generation);
+    ygm::container::map<map_key, uint64_t> matrix_C(world); 
+    double spgemm_start = MPI_Wtime();
+    test_COO.spGemm(*unsorted_matrix, matrix_C);
+    world.barrier();
+    double spgemm_end = MPI_Wtime();    
+    world.cout0("Total number of cores: ", world.size());
+    world.cout0("matrix multiplication time: ", spgemm_end - spgemm_start);
 
-    // world.cout0("matrix C size: ", matrix_C.size());   
+    world.cout0("matrix C size: ", matrix_C.size());   
 
-    // if(config.enableOutput){
-    //     ygm::container::bag<Edge> global_bag_C(world);
-    //     matrix_C.for_all([&global_bag_C](map_key coord, auto value){
-    //         global_bag_C.async_insert({coord.x, coord.y, value});
-    //     });
-    //     world.barrier();
+    if(config.enableOutput){
+        ygm::container::bag<Edge> global_bag_C(world);
+        matrix_C.for_all([&global_bag_C](map_key coord, auto value){
+            global_bag_C.async_insert({coord.x, coord.y, value});
+        });
+        world.barrier();
 
-    //     std::vector<Edge> sorted_output_C;
-    //     global_bag_C.gather(sorted_output_C, 0);
-    //     if(world.rank0()){
-    //         std::ofstream output_file;
-    //         output_file.open(config.outputFile);
-    //         std::sort(sorted_output_C.begin(), sorted_output_C.end());
-    //         for(Edge &ed : sorted_output_C){
-    //             output_file << ed.row << "," << ed.col << "," << ed.value << "\n";
-    //         }
-    //         output_file.close();    
-    //     }
-    // }
+        std::vector<Edge> sorted_output_C;
+        global_bag_C.gather(sorted_output_C, 0);
+        if(world.rank0()){
+            std::ofstream output_file;
+            output_file.open(config.outputFile);
+            std::sort(sorted_output_C.begin(), sorted_output_C.end());
+            for(Edge &ed : sorted_output_C){
+                output_file << ed.row << "," << ed.col << "," << ed.value << "\n";
+            }
+            output_file.close();    
+        }
+    }
     
-    // if(config.enableCSVCompare){
-    //     /*
-    //      * If output file has already been created, use it.
-    //      * else, create a temporary output file
-    //     */
-    //     std::string output = "output.csv";
-    //     std::string expected_output = config.outputCompare;
+    if(config.enableCSVCompare){
+        /*
+         * If output file has already been created, use it.
+         * else, create a temporary output file
+        */
+        std::string output = "output.csv";
+        std::string expected_output = config.outputCompare;
 
-    //     if(config.enableOutput){
-    //         output = config.outputFile;
-    //     }
-    //     else{
-    //         ygm::container::bag<Edge> global_bag_C(world);
-    //         matrix_C.for_all([&global_bag_C](map_key coord, auto value){
-    //             global_bag_C.async_insert({coord.x, coord.y, value});
-    //         });
-    //         world.barrier();
+        if(config.enableOutput){
+            output = config.outputFile;
+        }
+        else{
+            ygm::container::bag<Edge> global_bag_C(world);
+            matrix_C.for_all([&global_bag_C](map_key coord, auto value){
+                global_bag_C.async_insert({coord.x, coord.y, value});
+            });
+            world.barrier();
 
-    //         std::vector<Edge> sorted_output_C;
-    //         global_bag_C.gather(sorted_output_C, 0);
-    //         if(world.rank0()){
-    //             std::ofstream output_file;
-    //             output_file.open(output);
-    //             std::sort(sorted_output_C.begin(), sorted_output_C.end());
-    //             for(Edge &ed : sorted_output_C){
-    //                 output_file << ed.row << "," << ed.col << "," << ed.value << "\n";
-    //             }
-    //             output_file.close();
-    //         }
-    //     }
+            std::vector<Edge> sorted_output_C;
+            global_bag_C.gather(sorted_output_C, 0);
+            if(world.rank0()){
+                std::ofstream output_file;
+                output_file.open(output);
+                std::sort(sorted_output_C.begin(), sorted_output_C.end());
+                for(Edge &ed : sorted_output_C){
+                    output_file << ed.row << "," << ed.col << "," << ed.value << "\n";
+                }
+                output_file.close();
+            }
+        }
 
-    //     if(world.rank0()){
-    //         // ignore all: > /dev/null 2>&1
-    //         pid_t pid = getpid();
-    //         time_t now = time(0);
-    //         std::string unique_id = std::to_string(pid) + std::to_string(now);
-    //         std::string cmd = "diff -y --suppress-common-lines "
-    //                         + output + " " + expected_output + 
-    //                         " > " + unique_id + "_nodes_difference.txt";
-    //         int result = system(cmd.c_str());
+        if(world.rank0()){
+            // ignore all: > /dev/null 2>&1
+            pid_t pid = getpid();
+            time_t now = time(0);
+            std::string unique_id = std::to_string(pid) + std::to_string(now);
+            std::string cmd = "diff -y --suppress-common-lines "
+                            + output + " " + expected_output + 
+                            " > " + unique_id + "_nodes_difference.txt";
+            int result = system(cmd.c_str());
 
-    //         std::filesystem::remove("./output.csv");
-    //         if (result == 0) {
-    //             std::cout << "Files match!\n";
-    //             std::filesystem::remove(
-    //                         "../strong_scaling_output/epinions_results/" +
-    //                         unique_id + 
-    //                         "_nodes_difference.txt"
-    //                     );
-    //         } else {
-    //             std::cout << "Files differ!\n";
-    //         }
-    //     }
-    // }
+            std::filesystem::remove("./output.csv");
+            if (result == 0) {
+                std::cout << "Files match!\n";
+                std::filesystem::remove(
+                            "../strong_scaling_output/epinions_results/" +
+                            unique_id + 
+                            "_nodes_difference.txt"
+                        );
+            } else {
+                std::cout << "Files differ!\n";
+            }
+        }
+    }
    
     
 
