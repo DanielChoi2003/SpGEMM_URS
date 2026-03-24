@@ -125,7 +125,6 @@ public:
             }
         }
         m_comm.barrier();
-        bagbp.reset();
 
         uint64_t SHM_SIZE = sizeof(Value) * m_num_edges;
         

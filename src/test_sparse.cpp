@@ -11,15 +11,6 @@
 #include <algorithm>
 #include <boost/container_hash/hash.hpp>
 
-/*
-    MEM REQUIREMENT:
-        scale 19 (100% RMAT) edges approx: 5,042,946,712
-        Each edge contains: 3 uint64_t for row, column, value; 3 * 8 bytes = 24 bytes per edge
-        for matrix C: 5,042,946,712 * 24 bytes = 121,030,721,088 = 121 GB?
-        for matrix B: 8,388,608 edges
-                      8,388,608 * 24 bytes = 201,326,592 bytes = 200 MB
-        for matrix A: ~200 MB
-*/
 
 /*
     scale = 16
@@ -167,7 +158,6 @@ int main(int argc, char** argv){
     auto A_column_degree = std::make_unique<ygm::container::counting_set<uint64_t>>(world);
     auto B_row_degree = std::make_unique<ygm::container::counting_set<uint64_t>>(world);
     auto bagbp = std::make_unique<ygm::container::bag<Edge>>(world);
-    double A_deg_avg, B_deg_avg; 
     if(config.enableCSV){
 
         std::string filename_A = config.CSVInput1;
@@ -299,6 +289,10 @@ int main(int argc, char** argv){
     // Replace HUB_EDGES and B_HUBS with SHM_HUB object!
     double COO_generation = MPI_Wtime();
     Sorted_COO test_COO(world, topk, max_hub_edges, B_row_degree, bagbp);
+    // free memory after use
+    bagbp.reset();
+    B_row_degree.reset();
+    A_column_degree.reset();
     world.cout0("COO generation time: ", MPI_Wtime() - COO_generation);
     ygm::container::map<map_key, uint64_t> matrix_C(world); 
     double spgemm_start = MPI_Wtime();
