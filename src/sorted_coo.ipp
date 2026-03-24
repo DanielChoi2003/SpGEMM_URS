@@ -19,19 +19,20 @@ using std::vector;
 
 inline vector<uint64_t> Sorted_COO::get_owners(uint64_t source){
 
+    double st = MPI_Wtime();
     vector<uint64_t> owners;
-    auto comp_second = [](const std::pair<uint64_t, uint64_t>& lhs, uint64_t val) {
+    auto comp_second = [](const std::pair<int, int>& lhs, int val) {
         return lhs.second < val;
     };  
-   
-    auto it = std::lower_bound(row_owners.begin(), row_owners.end(), source, comp_second);
+     
+    auto it = std::lower_bound(nonhub_row_owners.begin(), nonhub_row_owners.end(), source, comp_second);
 
     // if it is equal to the end iterator, then theres no owner
-    if(it != row_owners.end()){
-        uint64_t owner_rank = it - row_owners.begin();
+    if(it != nonhub_row_owners.end()){
+        uint64_t owner_rank = it - nonhub_row_owners.begin();
         
-        while(owner_rank < row_owners.size()){
-            if(row_owners[owner_rank].first <= source){
+        while(owner_rank < nonhub_row_owners.size()){
+            if(nonhub_row_owners[owner_rank].first <= source){
                 owners.push_back(owner_rank);
                 owner_rank++;
             }
@@ -40,7 +41,8 @@ inline vector<uint64_t> Sorted_COO::get_owners(uint64_t source){
             }
         }
     }
-
+    st = MPI_Wtime() - st;
+    owner_search_time += st;
     return owners;
 }
 
@@ -72,38 +74,35 @@ template <class Matrix, class Accumulator>
 inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_accum){
     m_comm.stats_reset();
 
-
     auto multiplier = [](auto pmap, auto self, 
                         uint64_t input_value, uint64_t input_row, uint64_t input_column){
-        // CHANGE THIS FROM BINARY SEARCH TO CSR SEARCH
-        uint32_t loc = input_column - self->offset;
-        uint32_t global_offset = self->sorted_matrix.partitioner.local_start();
-        uint32_t start = global_offset + self->row_ptrs[loc];
-        uint32_t end = global_offset + self->row_ptrs[loc + 1]; // EXCLUSIVE
+        uint64_t loc = input_column - self->offset;
+        uint64_t global_offset = self->nonhub_edges->partitioner.local_start();
+        uint64_t start = global_offset + self->row_ptrs[loc];
+        uint64_t end = global_offset + self->row_ptrs[loc + 1]; // EXCLUSIVE
+            
         for(; start < end; start++){
             Edge match_edge = {};  
-            // local visit EXPECTS A GLOBAL INDEX. internally, converts it into a local index: 0 to local size
-            self->sorted_matrix.local_visit(start, [&match_edge](uint64_t index, Edge &edge){
+            self->nonhub_edges->local_visit(start, [&match_edge](uint64_t index, Edge &edge){
                 match_edge = edge;
             });
+            
             // NOTE: could potentially overflow with large values
             uint64_t product = input_value * match_edge.value; // valueB * valueA;
+            self->mult_count++;
             if(product == 0){
                 continue;
             }
-            auto adder = [](const auto &key, auto &value, auto to_add){
+            auto adder = [](const auto &key, auto &value, auto to_add, auto self){
                 value += to_add;
+                self->add_count++;
             };
-            pmap->async_visit({input_row, match_edge.col}, adder, product); // Boost's hasher complains if I use a struct
+            // is there a way to locally store and then merge it later? to reduce the number of async messages
+            pmap->async_visit({input_row, match_edge.col}, adder, product, self); // Boost's hasher complains if I use a struct
         } 
     }; 
     
     ygm::ygm_ptr<Accumulator> pmap(&partial_accum);
-    // URGENT:
-    // for(auto &ed : unsorted_matrix)
-    //    for every X counter,
-    //    m_comm.async_barrier(); interal buffer may be overflowing
-    m_comm.barrier();
     size_t counter = 0;
     // ygm may be returning Edge by value, not by reference. hence, non-const cannot be bind to it.
     for(auto const &ptr : unsorted_matrix){
@@ -111,16 +110,40 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
         uint64_t input_column = ed.col;
         uint64_t input_row = ed.row;
         uint64_t input_value = ed.value;
-        async_visit_row(input_column, multiplier, 
+        std::unordered_set<uint64_t> const& B_hub_rows = SHM_HUB.get_hub_set();
+        if(B_hub_rows.find(input_column) != B_hub_rows.end()){
+
+            // shm hub should return an Edge* pointer 
+            uint64_t loc = input_column - hub_offset;
+            uint64_t start = hub_row_ptrs[loc];
+            uint64_t end = hub_row_ptrs[loc + 1];
+            for(; start < end; start++){
+                Edge match_edge = *(SHM_HUB.get_IP_ptr(start));  
+                
+                // NOTE: could potentially overflow with large values
+                uint64_t product = input_value * match_edge.value; // valueB * valueA;
+                mult_count++;
+                if(product == 0){
+                    continue;
+                }
+                auto adder = [](const auto &key, auto &value, auto to_add, auto self){
+                    value += to_add;
+                    self->add_count++;
+                };
+                pmap->async_visit({input_row, match_edge.col}, adder, product, pthis); 
+            } 
+        }
+        else{
+            async_visit_row(input_column, multiplier, 
                         pmap, pthis, input_value, input_row, input_column);
-        counter++;
-        if(counter == 10000){
-            m_comm.async_barrier();
-            counter = 0;
         }
     }
-    m_comm.barrier();
+    m_comm.barrier(); 
 
+    uint64_t mult_total = ygm::sum(mult_count, m_comm);
+    uint64_t mult_max  = ygm::max(mult_count, m_comm);
+    uint64_t mult_avg = mult_total / m_comm.size();
+    m_comm.cout0("Multiplication Count Max: ", mult_max, ", Multiplication Count Average: ", mult_avg);
     m_comm.stats_print();
 }
 
