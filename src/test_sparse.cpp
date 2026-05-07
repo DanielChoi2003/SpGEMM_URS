@@ -285,7 +285,7 @@ int main(int argc, char** argv){
     }
     
     static uint32_t topk = 1000;
-    uint32_t max_hub_edges = 1024*1024; // NOT A STRICT CAP; MAY EXCEED
+    uint32_t max_hub_edges = 1024*1024*10; // NOT A STRICT CAP; MAY EXCEED
     // Replace HUB_EDGES and B_HUBS with SHM_HUB object!
     double COO_generation = MPI_Wtime();
     Sorted_COO test_COO(world, topk, max_hub_edges, B_row_degree, bagbp);
@@ -296,12 +296,14 @@ int main(int argc, char** argv){
     world.cout0("COO generation time: ", MPI_Wtime() - COO_generation);
     ygm::container::map<map_key, uint64_t> matrix_C(world); 
     double spgemm_start = MPI_Wtime();
-    test_COO.spGemm(*unsorted_matrix, matrix_C);
+    uint64_t total_mult_count = 0;
+    test_COO.spGemm(*unsorted_matrix, matrix_C, total_mult_count);
     world.barrier();
-    double spgemm_end = MPI_Wtime();    
+    double spgemm_time = MPI_Wtime() - spgemm_start;
+    double mult_rate = total_mult_count / spgemm_time;
     world.cout0("Total number of cores: ", world.size());
-    world.cout0("matrix multiplication time: ", spgemm_end - spgemm_start);
-
+    world.cout0("matrix multiplication time: ", spgemm_time);
+    world.cout0("Multiplication rate: ", mult_rate); 
     world.cout0("matrix C size: ", matrix_C.size());   
 
     if(config.enableOutput){

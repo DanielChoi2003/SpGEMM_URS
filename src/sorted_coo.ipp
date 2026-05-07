@@ -71,7 +71,7 @@ inline void Sorted_COO::async_visit_row(
 // input_value, input_row, input_column, pmap
 
 template <class Matrix, class Accumulator>
-inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_accum){
+inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_accum, uint64_t& total_mult){
     m_comm.stats_reset();
 
     auto multiplier = [](auto pmap, auto self, 
@@ -136,6 +136,10 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
         else{
             async_visit_row(input_column, multiplier, 
                         pmap, pthis, input_value, input_row, input_column);
+            // counter++;
+            // if(counter >= 100000){
+            //     m_comm.async_barrier();
+            // }
         }
     }
     m_comm.barrier(); 
@@ -143,6 +147,7 @@ inline void Sorted_COO::spGemm(Matrix &unsorted_matrix, Accumulator &partial_acc
     uint64_t mult_total = ygm::sum(mult_count, m_comm);
     uint64_t mult_max  = ygm::max(mult_count, m_comm);
     uint64_t mult_avg = mult_total / m_comm.size();
+    total_mult = mult_total;
     m_comm.cout0("Multiplication Count Max: ", mult_max, ", Multiplication Count Average: ", mult_avg);
     m_comm.stats_print();
 }

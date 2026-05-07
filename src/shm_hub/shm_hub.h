@@ -116,7 +116,25 @@ public:
         ygm::ygm_ptr<std::vector<Value>> hub_edge_ptr(&hub_edges);
         m_comm.barrier(); // to guarantee that all processors created ygm_ptr before async uses it
         hub_edge_ptr.check(m_comm);
+        double gather_time = MPI_Wtime();
         bag_hub_edges.gather(hub_edges, 0);
+        m_comm.cout0("gather time: ", MPI_Wtime() - gather_time);
+
+        double broadcast_time = MPI_Wtime();
+        /*
+            Bruck style allgather
+            In each node, have all ranks share each other's vector of values
+            * if bruck allgather is used for gathering data locally in each node, then every processor will have the same
+            copy of the node-local data, which may too much memory overhead. Instead, use binary tree to gather at master rank
+
+            then use Bruck allgather with master ranks
+
+            after each node has gathered its data, only MASTER ranks communicate with other master ranks
+            and gather entire data
+
+            1. intra-node merge: binary tree
+            2. inter-node merge: Bruck allgather
+        */
         if(m_comm.rank0()){
             for(int i = m_local_size; i < m_comm.size() ; i += m_local_size){
                 m_comm.async(i, [](ygm::ygm_ptr<std::vector<Value>> hub_edge_ptr, std::vector<Value> edges){
@@ -125,6 +143,7 @@ public:
             }
         }
         m_comm.barrier();
+        m_comm.cout0("broadcast time (master rank): ", MPI_Wtime() - broadcast_time);
 
         uint64_t SHM_SIZE = sizeof(Value) * m_num_edges;
         

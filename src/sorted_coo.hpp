@@ -201,7 +201,7 @@ public:
         @param Accumulator C: distributed map that stores the partial products
     */
     template <class Matrix, class Accumulator>
-    void spGemm(Matrix &matrix_A, Accumulator &partial_accum);
+    void spGemm(Matrix &matrix_A, Accumulator &partial_accum, uint64_t& total_mult);
 
 
 private:
