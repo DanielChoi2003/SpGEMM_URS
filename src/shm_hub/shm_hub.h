@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <stdio.h> 
 #include <unordered_set> 
+#include <vector>
 
 
 /*
@@ -98,44 +99,41 @@ public:
         m_comm.barrier();
         m_num_edges = cumulative_edges;
 
+
+        // Use ring-style gather for master ranks
+        // Use local vectors instead of bags when separating from non hub edges to hub edge
+
         ygm::container::bag<Value> bag_nonhub_edges(m_comm);
-        ygm::container::bag<Value> bag_hub_edges(m_comm);
-        bagbp->for_all([this, &bag_nonhub_edges, &bag_hub_edges](const Value& ed){
-            if(m_hubs.find(ed.row) != m_hubs.end()){ // HUB EDGE
-                bag_hub_edges.async_insert(ed);
+        std::vector<Value> vec_hub_edges; // these need to be made into a ygm ptr so master rank can access when called remotely
+        ygm::ygm_ptr<std::vector<Value>> vec_hub_ptr(&vec_hub_edges);
+        bagbp->for_all([this, &bag_nonhub_edges, &vec_hub_edges](const Value& ed){
+            if(m_hubs.find(ed.row) != m_hubs.end()){
+                vec_hub_edges.push_back(ed);
             }
             else{
                 bag_nonhub_edges.async_insert(ed);
             }
         });
 
+        /*
+            gather local vectors to their own respective master rank
+        */
+        if(m_local_id != 0){
+            int master_rank = m_local_id + (m_node_id * m_local_size); // double check this
+            auto gather_vector = [vec_hub_ptr](std::vector<Value> send_vec){
+                vec_hub_ptr->insert(vec_hub_ptr->end(), send_vec.begin(), send_vec.end());
+            };
+            m_comm.async(master_rank, gather_vector, vec_hub_edges);
+        }
+
         nonhub_edges = std::make_unique<ygm::container::array<Value>>(m_comm, bag_nonhub_edges);
         nonhub_edges->sort();
-       
-        std::vector<Value> hub_edges;
-        ygm::ygm_ptr<std::vector<Value>> hub_edge_ptr(&hub_edges);
-        m_comm.barrier(); // to guarantee that all processors created ygm_ptr before async uses it
-        hub_edge_ptr.check(m_comm);
-        double gather_time = MPI_Wtime();
-        bag_hub_edges.gather(hub_edges, 0);
-        m_comm.cout0("gather time: ", MPI_Wtime() - gather_time);
 
         double broadcast_time = MPI_Wtime();
         /*
-            Bruck style allgather
-            In each node, have all ranks share each other's vector of values
-            * if bruck allgather is used for gathering data locally in each node, then every processor will have the same
-            copy of the node-local data, which may too much memory overhead. Instead, use binary tree to gather at master rank
-
-            then use Bruck allgather with master ranks
-
-            after each node has gathered its data, only MASTER ranks communicate with other master ranks
-            and gather entire data
-
-            1. intra-node merge: binary tree
-            2. inter-node merge: Bruck allgather
+            ring style gather
         */
-        if(m_comm.rank0()){
+        if(m_local_id == 0){ // run if you are a master rank
             for(int i = m_local_size; i < m_comm.size() ; i += m_local_size){
                 m_comm.async(i, [](ygm::ygm_ptr<std::vector<Value>> hub_edge_ptr, std::vector<Value> edges){
                     *hub_edge_ptr = edges;

@@ -116,7 +116,13 @@ function(setup_ygm_target exe_name)
 endfunction()
 
 function(add_ygm_executable name)
-    add_executable(${name} ${name}.cpp)
+
+    set(source_file "${ARGV1}")
+    if(NOT source_file) # if second arg is not given
+        set(source_file "${name}.cpp")
+    endif()
+
+    add_executable(${name} ${source_file})
     add_common_compile_options(${name})
     target_include_directories(${name} PRIVATE ${PROJECT_SOURCE_DIR}/include ${BOOST_INCLUDE_DIRS})
     target_link_libraries(${name} PRIVATE Boost::json)
