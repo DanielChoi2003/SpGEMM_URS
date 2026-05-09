@@ -261,7 +261,7 @@ private:
     uint32_t                                           m_topk = -1;
     std::unordered_set<uint64_t>                       m_hubs;
 
-    // Interprocess pointer to the node-local shared memeory file
+    // Interprocess pointer to the node-local shared memory file
     std::unique_ptr<void, MMapDestructor>              m_ip_ptr;
     int                                                m_local_id = -1;
     int                                                m_node_id = -1;
