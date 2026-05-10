@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-#add_ygm_executable(test_sparse test_sparse.cpp)
+add_ygm_executable(test_sparse)
 add_ygm_executable(ring_gather gather/ring_gather.cpp)
 #add_ygm_executable(rmat_spgemm_no_cache test_sparse.cpp)
 #add_ygm_executable(rmat_spgemm_cache test_sparse.cpp)

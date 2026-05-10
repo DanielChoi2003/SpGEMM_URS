@@ -19,25 +19,27 @@ public:
                 m_local_size(m_comm.layout().local_size()),
                 m_local_id(m_comm.layout().local_id()),
                 m_node_id(m_comm.layout().node_id()),
-                m_node_size(m_comm.layout().node_size())
+                m_node_size(m_comm.layout().node_size()),
+                pthis(this)
                 
     {
         pthis.check(m_comm);
     }
 
 
-    vector<Value> Ring_Gather_Master_Rank(vector<Value> local_vec){
+    vector<Value> Ring_Gather_Master_Rank(vector<Value>& local_vec){
         m_comm.welcome();
 
 
         // incoming should be a queue, not a vector, because it can be overwritten by a second call
 
-        auto recv_vec = [](auto self, vector<uint64_t> vec){
+        auto recv_vec = [](auto self, vector<Value> vec){
             self->incoming.push(vec);
             self->recv_count++;
         };
 
         vector<Value> recv = local_vec;
+        accum = local_vec;
 
         m_comm.barrier();
 
@@ -52,10 +54,8 @@ public:
                 m_comm.local_wait_until([this, &target]{
                     return recv_count >= target; 
                 });
-                cout << incoming.size() << endl;
                 recv = incoming.front();
                 incoming.pop();
-                cout << "popped" << endl;
                 accum.insert(accum.end(), recv.begin(), recv.end());
             }
         }

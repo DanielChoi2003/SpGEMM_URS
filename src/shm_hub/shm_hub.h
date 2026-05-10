@@ -18,6 +18,7 @@
 #include <stdio.h> 
 #include <unordered_set> 
 #include <vector>
+#include "../gather/ring_gather.h"
 
 
 /*
@@ -86,7 +87,7 @@ public:
         });
 
         size_t cumulative_edges = 0;
-        auto topk_hub_curr = topk_hubs.begin();
+        auto topk_hub_curr = topk_hubs.begin(); // pointer
         while(cumulative_edges < max_num_edges && topk_hub_curr != topk_hubs.end()){
             cumulative_edges += topk_hub_curr->second;
             m_hubs.insert(topk_hub_curr->first); 
@@ -118,8 +119,9 @@ public:
         /*
             gather local vectors to their own respective master rank
         */
+        double gather_start = MPI_Wtime();
         if(m_local_id != 0){
-            int master_rank = m_local_id + (m_node_id * m_local_size); // double check this
+            int master_rank = m_node_id * m_local_size; 
             auto gather_vector = [vec_hub_ptr](std::vector<Value> send_vec){
                 vec_hub_ptr->insert(vec_hub_ptr->end(), send_vec.begin(), send_vec.end());
             };
@@ -129,19 +131,12 @@ public:
         nonhub_edges = std::make_unique<ygm::container::array<Value>>(m_comm, bag_nonhub_edges);
         nonhub_edges->sort();
 
-        double broadcast_time = MPI_Wtime();
-        /*
-            ring style gather
-        */
-        if(m_local_id == 0){ // run if you are a master rank
-            for(int i = m_local_size; i < m_comm.size() ; i += m_local_size){
-                m_comm.async(i, [](ygm::ygm_ptr<std::vector<Value>> hub_edge_ptr, std::vector<Value> edges){
-                    *hub_edge_ptr = edges;
-                }, hub_edge_ptr, hub_edges);
-            }
-        }
+        m_comm.barrier(); // wait for hub edges to be collected in the master ranks
+
+        RingGather<Value> RG(m_comm);
+        std::vector<Value> global_hub_edges = RG.Ring_Gather_Master_Rank(vec_hub_edges);
         m_comm.barrier();
-        m_comm.cout0("broadcast time (master rank): ", MPI_Wtime() - broadcast_time);
+        m_comm.cout0("Gather time (intra-node gather + inter-node ring gather): ", MPI_Wtime() - gather_start);
 
         uint64_t SHM_SIZE = sizeof(Value) * m_num_edges;
         
@@ -171,8 +166,8 @@ public:
             close(fd);            
             
             // COPY THE HUB EDGES INTO THE SHARED MEM. FILE
-            sort(hub_edges.begin(), hub_edges.end());
-            std::memcpy(base, hub_edges.data(), SHM_SIZE);
+            sort(global_hub_edges.begin(), global_hub_edges.end());
+            std::memcpy(base, global_hub_edges.data(), SHM_SIZE);
             m_ip_ptr = std::unique_ptr<void, MMapDestructor>(base, MMapDestructor(SHM_SIZE));
             //m_comm.cout("--- Master Rank ", m_comm.rank(), " is done creating shm file ---");
 
